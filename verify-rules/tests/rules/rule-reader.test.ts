@@ -244,6 +244,7 @@ test("a heading ends a rule even when a line follows it with no blank line", () 
   const res = readSmall("## A\n\n- **One.**\n## B\n  *File:* `x.py`\n");
   assert.deepEqual(res.problems.map((p) => p.problem), ["a file line is not directly under its rule's text"]);
   assert.equal(res.rules[0].endLine, 3);
+  assert.deepEqual(readSmall("## A\n\n- **One.**\n## B\nA line under B.\n").stray.map((s) => s.line), [5]);
 });
 
 test("a line straight after a file line is stray, not the rule's text", () =>
@@ -302,12 +303,16 @@ test("a fenced block at a rule's indent or the margin is in no rule: its lines a
   assert.deepEqual(res.rules.map((r) => [r.bold, r.startLine, r.endLine]), [["One.", 3, 3], ["Three.", 7, 7]]);
   assert.deepEqual(res.stray.map((s) => s.line), [4, 5, 6, 8, 9, 10, 11]);
   assert.deepEqual(res.problems, []);
+  const tildes = readSmall("## A\n\n```\n~~~\n- **Hidden.**\n```\n");
+  assert.deepEqual([tildes.rules, tildes.stray.map((s) => s.line)], [[], [3, 4, 5, 6]]);
 });
 
-test("a numbered line straight after a line of text is a sub-rule only if it is numbered 1 or goes on a list", () => {
+test("a numbered line straight after text is a sub-rule only with a bold sentence, as 1, or going on a list", () => {
   const res = readSmall("## A\n\n- **Cap.** The cap is set to\n  16. It is measured first.\n- **Steps.** Two:\n  1. First,\n" +
-    "  2. then second.\n\n  5. Fifth, after a blank line.\n");
+    "  2. then second.\n\n    5. Fifth, after a blank line.\n");
   assert.deepEqual(res.rules.map((x) => [x.bold, x.subrules.map((sub) => sub.line)]), [["Cap.", []], ["Steps.", [6, 7, 9]]]);
+  const stepped = readSmall("## A\n\n- **Ordered.** In order:\n  3. **Third step.** Done.\n  ```\n  code\n  ```\n   7. After the block.\n");
+  assert.deepEqual(stepped.rules[0].subrules, [{ bold: "Third step.", line: 4 }, { bold: null, line: 8 }]);
 });
 
 test("a bold sentence is trimmed, as both repos' checks read it", () => {

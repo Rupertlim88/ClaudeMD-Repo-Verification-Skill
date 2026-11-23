@@ -132,6 +132,8 @@ test("overlapping clauses are refused, and a clause given twice counts once for 
   assert.deepEqual(padded.problems, ['the clause "A is red. " overlaps an earlier clause']);
   assert.deepEqual(checkClauses(t, [[0, 10], [10, 32], [12, 20]]).problems,
     ['the clause "B is blue. C is green." crosses the sentence boundary at 21', 'the clause "is blue." overlaps an earlier clause']);
+  assert.deepEqual(checkClauses("It runs on and on and on.", [[0, 25], [3, 7], [8, 10]]).problems,
+    ['the clause "runs" overlaps an earlier clause', 'the clause "on" overlaps an earlier clause']);
 });
 
 test("a clause that crosses a sentence boundary is refused: no re-cut of a merged list passes", () => {
