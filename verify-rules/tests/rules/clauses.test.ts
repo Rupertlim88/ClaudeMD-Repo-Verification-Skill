@@ -123,7 +123,40 @@ test("the cut between two markers never falls inside a number", () => {
 });
 
 test("an empty span is no clause", () =>
-  assert.ok(checkClauses("Never stop. Go.", [[0, 12], [12, 12], [12, 15]]).problems.some((p) => /not inside the text/.test(p))));
+  assert.deepEqual(checkClauses("Never stop. Go.", [[0, 12], [12, 12], [12, 15]]).problems, ["the span 12-12 is empty"]));
+
+test("overlapping clauses are refused, and a clause given twice counts once for the floor", () => {
+  const t = "A is red. B is blue. C is green.";
+  const padded = checkClauses(t, [[0, 10], [0, 10], [10, 21], [21, 32]]);
+  assert.deepEqual([padded.ok, padded.clauses, padded.floor], [false, 3, 3]);
+  assert.deepEqual(padded.problems, ['the clause "A is red. " overlaps an earlier clause']);
+  assert.deepEqual(checkClauses(t, [[0, 10], [10, 32], [12, 20]]).problems,
+    ['the clause "B is blue. C is green." crosses the sentence boundary at 21', 'the clause "is blue." overlaps an earlier clause']);
+});
+
+test("a clause that crosses a sentence boundary is refused: no re-cut of a merged list passes", () => {
+  assert.deepEqual(checkClauses("It runs. It stops.", [[0, 12], [12, 18]]).problems,
+    ['the clause "It runs. It " crosses the sentence boundary at 9']);
+  const at = (s: string): [number, number] => [GRAPH.indexOf(s), GRAPH.indexOf(s) + s.length];
+  const recut = checkClauses(GRAPH, [
+    at("- **Every experiment includes the threshold graph.** Its x-axis is the threshold: LodeSTAR's score cutoff, from "),
+    at("0.96 to "), at("0.999, in steps of "), at("0.001. Its y-axis is the percentage hit, with "), at("one line for "),
+    at("each type of object. The graph also shows LodeSTAR alone, without FSCN, for comparison.")]);
+  assert.equal(recut.ok, false);
+  assert.equal(recut.problems.filter((p) => /crosses the sentence boundary/.test(p)).length, 3);
+});
+
+test("a clause edge inside a tag, a table, a fenced block, a number or a word is refused, so further cuts keep them whole", () => {
+  const rule = ruleOf("## A\n\n1. **The API has a spec.** *(NIST REC-API-1)* It lists 5,000:\n\n   ```\n   GET /v1/a 200 only\n   ```\n\n" +
+    "   | each | 1 |\n   | every | 2 |\n");
+  const cutInside = (s: string, by = 2) => clauseTable(rule, [rule.text.indexOf(s) + by]).check.problems;
+  assert.deepEqual(cutInside("REC-API"), [`the clause edge at ${rule.text.indexOf("REC-API") + 2} is inside a tag`]);
+  assert.deepEqual(cutInside("/v1/a"), [`the clause edge at ${rule.text.indexOf("/v1/a") + 2} is inside a fenced block`]);
+  assert.deepEqual(cutInside("   | every", 0), [`the clause edge at ${rule.text.indexOf("   | every")} is inside a table`]);
+  assert.deepEqual(cutInside("5,000"), [`the clause edge at ${rule.text.indexOf("5,000") + 2} is inside a number`]);
+  assert.deepEqual(cutInside("spec."), [`the clause edge at ${rule.text.indexOf("spec.") + 2} is inside a word`]);
+  assert.equal(clauseTable(rule).check.ok, true);
+});
 
 test("the cut between two markers goes after the last comma between them", () => {
   const t = "It uses 5 steps, slowly, and 8 copies.";

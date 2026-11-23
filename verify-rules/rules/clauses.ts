@@ -15,6 +15,7 @@ const KEYWORD_MARKER = new RegExp(`\\b(?:${KEYWORD})(?:\\s+(?:${KEYWORD}))*\\b`,
 const NUMBER_WORDS = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve";
 const NUMBER = new RegExp(`\\b(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?\\b|\\b(?:${NUMBER_WORDS})\\b`, "gi");
 const WORD = /[\p{L}\p{N}]+/gu;
+const WORD_CHARACTER = /^[\p{L}\p{N}]$/u;
 const ABBREVIATION = /\b(?:e\.g|i\.e|et al|etc|vs|cf)$/i;
 const LIST_MARKER = /^(\s*)([-*+]|\d+[.)])(?=\s)/;
 const TABLE_LINE = /^\s*\|/;
@@ -22,7 +23,10 @@ const TAG = /\*\([^\n]*?\)\*/g;                      // such as *(NIST REC-API-3
 
 const blank = (s: string) => s.replace(/[^\n]/g, " ");
 
-interface Reading { words: string; scan: string; subruleStarts: number[]; numbers: Span[]; keywords: Span[] }
+// A part of the text that is never cut: a fenced block or a table (each a run of lines), or a tag.
+interface Whole { kind: "fenced block" | "table" | "tag"; start: number; end: number }
+
+interface Reading { words: string; scan: string; subruleStarts: number[]; numbers: Span[]; keywords: Span[]; wholes: Whole[] }
 
 // The rule's text as the cut reads it, each the same length as the text. In `words`, list markers are blanked out,
 // so the rule's own list number and its sub-rules' numbers are not words. In `scan`, bold markers, fenced blocks
@@ -32,16 +36,24 @@ function reading(text: string): Reading {
   const words: string[] = [];
   const scan: string[] = [];
   const subruleStarts: number[] = [];
+  const wholes: Whole[] = [];
   const kinds = ruleTextLines(text);
   let offset = 0;
   for (const [i, line] of text.split("\n").entries()) {
-    if (kinds[i] === "fence" || TABLE_LINE.test(line)) {
+    const block = kinds[i] === "fence" ? "fenced block" : TABLE_LINE.test(line) ? "table" : null;
+    if (block !== null) {
       words.push(line);
       scan.push(blank(line));
+      const last = wholes.at(-1);
+      if (last?.kind === block && last.end === offset - 1) last.end = offset + line.length;
+      else wholes.push({ kind: block, start: offset, end: offset + line.length });
     } else {
       const marker = kinds[i] === "item" ? LIST_MARKER.exec(line) : null;
       const unmarked = marker === null ? line : marker[1] + blank(marker[2]) + line.slice(marker[0].length);
       if (marker !== null && i > 0) subruleStarts.push(offset);
+      for (const tag of unmarked.matchAll(TAG)) {
+        wholes.push({ kind: "tag", start: offset + tag.index, end: offset + tag.index + tag[0].length });
+      }
       words.push(unmarked);
       scan.push(unmarked.replace(TAG, blank).replace(/\*\*/g, "  "));
     }
@@ -49,7 +61,7 @@ function reading(text: string): Reading {
   }
   const scanText = scan.join("\n");
   const spans = (pattern: RegExp) => [...scanText.matchAll(pattern)].map((m): Span => [m.index, m.index + m[0].length]);
-  return { words: words.join("\n"), scan: scanText, subruleStarts, numbers: spans(NUMBER), keywords: spans(KEYWORD_MARKER) };
+  return { words: words.join("\n"), scan: scanText, subruleStarts, numbers: spans(NUMBER), keywords: spans(KEYWORD_MARKER), wholes };
 }
 
 const within = (markers: Span[], [start, end]: Span) => markers.filter(([s]) => s >= start && s < end);
@@ -108,34 +120,62 @@ export function floor(text: string): number {
   return floorOf(text, reading(text));
 }
 
+const strictlyInside = (edge: number, [start, end]: Span) => start < edge && edge < end;
+
+// What a clause edge falls inside, if anything: a fenced block, a table, a tag, a number or a word.
+function insideOf(edge: number, text: string, r: Reading): string | null {
+  const whole = r.wholes.find((w) => strictlyInside(edge, [w.start, w.end]));
+  if (whole !== undefined) return whole.kind;
+  if (r.numbers.some((number) => strictlyInside(edge, number))) return "number";
+  return WORD_CHARACTER.test(text.charAt(edge - 1)) && WORD_CHARACTER.test(text.charAt(edge)) ? "word" : null;
+}
+
+// Each span must be a clause: inside the text, not empty, overlapping no other, within one sentence, with no edge
+// inside a block, a table, a tag, a number or a word, and holding at most one number and one keyword. Together the
+// clauses cover every word, and there are at least as many distinct ones as the floor.
 export function checkClauses(text: string, spans: readonly Span[]): ClauseCheck {
   const r = reading(text);
   const problems: string[] = [];
-  const covered = new Array<boolean>(text.length).fill(false);
+  const clauses: Span[] = [];
   for (const [start, end] of spans) {
-    if (!(start >= 0 && start < end && end <= text.length)) {
-      problems.push(`the span ${start}-${end} is not inside the text`);
-      continue;
-    }
-    covered.fill(true, start, end);
+    if (start === end) problems.push(`the span ${start}-${end} is empty`);
+    else if (start < 0 || start > end || end > text.length) problems.push(`the span ${start}-${end} is not inside the text`);
+    else clauses.push([start, end]);
+  }
+  clauses.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const boundaries = sentenceSpans(text, r).flat();
+  const covered = new Array<boolean>(text.length).fill(false);
+  let reach = 0;                                                 // the furthest end of the clauses so far
+  for (const [start, end] of clauses) {
     const clause = JSON.stringify(text.slice(start, end));
+    if (start < reach) problems.push(`the clause ${clause} overlaps an earlier clause`);
+    reach = Math.max(reach, end);
+    covered.fill(true, start, end);
+    const boundary = boundaries.find((b) => strictlyInside(b, [start, end]));
+    if (boundary !== undefined) problems.push(`the clause ${clause} crosses the sentence boundary at ${boundary}`);
     const numbers = within(r.numbers, [start, end]).length;
     const keywords = within(r.keywords, [start, end]).length;
     if (numbers > 1) problems.push(`the clause ${clause} holds ${numbers} numbers`);
     if (keywords > 1) problems.push(`the clause ${clause} holds ${keywords} keywords`);
+  }
+  for (const edge of new Set(clauses.flat())) {
+    const inside = insideOf(edge, text, r);
+    if (inside !== null) problems.push(`the clause edge at ${edge} is inside a ${inside}`);
   }
   for (const word of r.words.matchAll(WORD)) {
     if (!covered.slice(word.index, word.index + word[0].length).every(Boolean)) {
       problems.push(`the word ${JSON.stringify(word[0])} at ${word.index} is in no clause`);
     }
   }
+  const distinct = new Set(clauses.map(([start, end]) => `${start}-${end}`)).size;
   const need = floorOf(text, r);
-  if (spans.length < need) problems.push(`${spans.length} clauses, below the floor of ${need}`);
-  return { ok: problems.length === 0, clauses: spans.length, floor: need, problems };
+  if (distinct < need) problems.push(`${distinct} clauses, below the floor of ${need}`);
+  return { ok: problems.length === 0, clauses: distinct, floor: need, problems };
 }
 
 // The rule's clause table: the first cut, each clause cut again at the reviewer's further cuts that fall inside it.
-// A further cut can only split a clause; it never joins two.
+// A further cut can only split a clause; it never joins two, and one inside a block, a table, a tag, a number or a
+// word fails the check.
 export function clauseTable(rule: Rule, furtherCuts: readonly number[] = []): { clauses: Clause[]; check: ClauseCheck } {
   const spans = firstCut(rule.text).flatMap(([start, end]) => {
     const inside = [...new Set(furtherCuts)].filter((cut) => cut > start && cut < end).sort((a, b) => a - b);
