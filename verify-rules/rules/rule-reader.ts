@@ -134,25 +134,21 @@ function fileLine(value: RegExpExecArray, line: number): FileLine {
   return value[2] === "needed" ? { kind: "needed", line } : { kind: "whole-folder", line };
 }
 
-// A rule is an item at the start of its line that no rule's text holds. Its text goes on through every line indented
-// deeper than it, every line straight after one of its lines, and every fenced block opened in it; it ends at the
-// next rule at the same or a lower indent, a heading, a file line, a fence at its indent or lower, or a line at its
-// indent after a blank line. A fenced block outside every rule is stray, and one never closed is a problem.
+// A rule is an item at the start of its line that no rule's text holds. Its text runs over blank lines to the next
+// rule at the same or a lower indent, the next heading, its file line, or a fence at its indent or lower; it holds
+// every fenced block opened in it. A file line ties its rule only straight after a line of the rule's text. A fenced
+// block outside every rule is stray, and one never closed is a problem.
 export function readClaudeMd(claude: string, text: string, globalText: string): ReadResult {
   const all = lines(text);
   const units = skippedUnits(claude, globalText);
   const result: ReadResult = { rules: [], skipped: [], stray: [], problems: [] };
-  let rule: Rule | null = null;                                  // the rule the next line may belong to
-  let tied: Rule | null = null;                                  // the rule whose file line the last line was
-  let fence: Fence | null = null;                                // the open fenced block, in `rule` if that is open
+  let rule: Rule | null = null;           // the rule whose text the next line may go on
+  let fence: Fence | null = null;         // the open fenced block, in `rule` if that is open
   let category: string | null = null;
-  let afterBlank = false;
 
   for (let i = 0; i < all.length; i++) {
     const line = all[i];
     const n = i + 1;
-    const tiedBefore = tied;
-    tied = null;
 
     if (fence !== null) {
       const where = fenceLine(fence, line);
@@ -175,15 +171,9 @@ export function readClaudeMd(claude: string, text: string, globalText: string): 
       else result.skipped.push({ kind: unit.kind, start: n, end });
       i = end - 1;
       rule = null;
-      afterBlank = false;
       continue;
     }
-    if (isBlank(line)) {
-      afterBlank = true;
-      continue;
-    }
-    const wasAfterBlank = afterBlank;
-    afterBlank = false;
+    if (isBlank(line)) continue;
 
     if (headingLevel(line) !== null) {
       rule = null;
@@ -193,20 +183,17 @@ export function readClaudeMd(claude: string, text: string, globalText: string): 
     if (FILE_LINE.test(line)) {
       const problem = (why: string) => result.problems.push({ line: n, text: line, problem: why });
       const value = FILE_VALUE.exec(line);
-      if (tiedBefore !== null) problem("a rule names two files");
-      else if (rule === null || wasAfterBlank) problem("a file line is not directly under its rule's text");
+      if (result.rules.at(-1)?.fileLine?.line === n - 1) problem("a rule names two files");
+      else if (rule === null || rule.endLine !== n - 1) problem("a file line is not directly under its rule's text");
       else if (value === null) problem("a file line names no file, nor 'the whole folder' or 'needed'");
-      else {
-        rule.fileLine = fileLine(value, n);
-        tied = rule;
-      }
+      else rule.fileLine = fileLine(value, n);
       rule = null;
       continue;
     }
 
     const item = ITEM.exec(line);
     const indent = indentOf(line);
-    if (rule !== null && (indent > rule.indent || (!wasAfterBlank && item === null && !FENCE_OPEN.test(line)))) {
+    if (rule !== null && (indent > rule.indent || (item === null && !FENCE_OPEN.test(line)))) {
       rule.endLine = n;
       fence = openFence(line, n, rule.indent);
       continue;

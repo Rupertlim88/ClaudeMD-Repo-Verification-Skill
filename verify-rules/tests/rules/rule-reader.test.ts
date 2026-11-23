@@ -180,12 +180,20 @@ test("a CRLF file reads the same rules as its LF copy", () => {
 
 test("non-blank lines outside a heading, the opening, the block, a rule and a file line are stray, with their lines", () => {
   assert.deepEqual(read(LOWER).stray, [{ line: 12, text: "Stray scope line." }]);
-  const res = read("## A\n\n- **One.** Text.\nA line straight after the rule is its text.\n\nA paragraph at the margin.\n" +
-    "  An indented line after it.\n\n```\n- code outside any rule\n```\n");
-  assert.equal(res.rules[0].text, "- **One.** Text.\nA line straight after the rule is its text.");
-  assert.deepEqual(res.stray, [{ line: 6, text: "A paragraph at the margin." }, { line: 7, text: "  An indented line after it." },
-    { line: 9, text: "```" }, { line: 10, text: "- code outside any rule" }, { line: 11, text: "```" }]);
+  const res = read("## A\n\nA line under a heading.\n- **One.** Text.\n  *File:* `one.py`\nA line after a file line.\n\n" +
+    "```\n- code outside any rule\n```\n");
+  assert.deepEqual(res.stray, [{ line: 3, text: "A line under a heading." }, { line: 6, text: "A line after a file line." },
+    { line: 8, text: "```" }, { line: 9, text: "- code outside any rule" }, { line: 10, text: "```" }]);
   assert.equal(res.rules.length, 1);
+});
+
+test("a rule's text runs over blank lines to the next rule at its indent or lower, the next heading, or its file line", () => {
+  const res = readSmall("## A\n\n12. **Test first.** Use TDD.\n\nCode written before its test is deleted.\n\n- **Next.**\n## B\n\n" +
+    "- **Last.** One.\n\nIts second paragraph.\n  *File:* `last.py`\n\n");
+  assert.deepEqual(res.rules.map((r) => [r.bold, r.startLine, r.endLine]), [["Test first.", 3, 5], ["Next.", 7, 7], ["Last.", 10, 12]]);
+  assert.equal(res.rules[0].text, "12. **Test first.** Use TDD.\n\nCode written before its test is deleted.");
+  assert.deepEqual(res.rules[2].fileLine, { kind: "path", path: "last.py", line: 13 });
+  assert.deepEqual([res.stray, res.problems], [[], []]);
 });
 
 test("a file line not directly under its rule, and a second file line, are problems", () => {
@@ -243,9 +251,9 @@ test("the bold sentence is the first bold span, not up to the last", () =>
   assert.equal(readSmall("## A\n\n18. **Mode switch.** The mode is: **test**.\n").rules[0].bold, "Mode switch."));
 
 test("a line of spaces is a blank line", () => {
-  const res = readSmall("## A\n\n- **One.** Text.\n   \nA paragraph.\n");
-  assert.equal(res.rules[0].endLine, 3);
-  assert.deepEqual(res.stray.map((s) => s.line), [5]);
+  const res = readSmall("## A\n   \n- **One.** Text.\n   \n  *File:* `a.py`\n");
+  assert.deepEqual([res.rules[0].endLine, res.stray], [3, []]);
+  assert.deepEqual(res.problems.map((p) => p.problem), ["a file line is not directly under its rule's text"]);
 });
 
 test("a global with no System Rules block skips only the opening", () =>
