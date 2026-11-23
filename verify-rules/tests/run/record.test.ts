@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { test } from "node:test";
 import { append, canonicalJson, chainHead, trailers, verifyChain, verifyTrailers } from "../../run/record.ts";
 import { createRun } from "../../run/state.ts";
+import { atOnce } from "../helpers/at-once.ts";
 import { git, makeRepo, tmpDir } from "../helpers/tmp.ts";
 
 const t0 = new Date("2026-11-23T05:48:54Z");
@@ -38,6 +39,17 @@ test("a field cannot replace an entry's time or kind", () => {
   const p = newRun();
   const h = append(p, "verdict", { t: "1999-01-01T00:00:00Z", kind: "approval" }, t0);
   assert.equal(h, sha256("0".repeat(64) + '{"kind":"verdict","t":"2026-11-23T05:48:54Z"}'));
+});
+
+test("four processes appending at once lose no entry, and the chain verifies", async () => {
+  const p = newRun();
+  const writers = ["1", "2", "3", "4"];
+  const ends = await atOnce(writers.map((writer) => ["append", p.root, writer, "50"]));
+  assert.deepEqual(ends, writers.map(() => ({ code: 0, stderr: "" })));
+  const written = fs.readFileSync(p.record, "utf8").split("\n").filter((line) => line !== "").map((line) => JSON.parse(line));
+  const every = writers.flatMap((writer) => Array.from({ length: 50 }, (_, i) => `${writer}.${i}`));
+  assert.deepEqual(written.map((e) => `${e.writer}.${e.i}`).sort(), every.sort());
+  assert.equal(verifyChain(p).ok, true);
 });
 
 test("verifyChain passes an untouched record, with its head and its number of entries", () => {

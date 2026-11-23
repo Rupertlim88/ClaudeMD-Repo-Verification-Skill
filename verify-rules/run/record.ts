@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { utcSeconds, writeWhole, type RunPaths, type StepId } from "./state.ts";
+import { utcSeconds, withLock, writeWhole, type RunPaths, type StepId } from "./state.ts";
 
 const EMPTY_HEAD = "0".repeat(64);
 
@@ -28,12 +28,15 @@ export function chainHead(p: RunPaths): string {
   return all.length === 0 ? EMPTY_HEAD : String(all[all.length - 1].chain);
 }
 
-// Adds one entry and returns its chain hash: the SHA-256 of the previous hash followed by the entry's JSON.
+// Adds one entry, holding the run folder's lock, and returns its chain hash: the SHA-256 of the previous hash
+// followed by the entry's JSON.
 export function append(p: RunPaths, kind: string, fields: Record<string, unknown>, now = new Date()): string {
   const entry = { ...fields, t: utcSeconds(now), kind };
-  const chain = sha256(chainHead(p) + canonicalJson(entry));
-  writeWhole(p.record, fs.readFileSync(p.record, "utf8") + canonicalJson({ ...entry, chain }) + "\n");
-  return chain;
+  return withLock(p, () => {
+    const chain = sha256(chainHead(p) + canonicalJson(entry));
+    writeWhole(p.record, fs.readFileSync(p.record, "utf8") + canonicalJson({ ...entry, chain }) + "\n");
+    return chain;
+  });
 }
 
 export function verifyChain(p: RunPaths): { ok: true; head: string; entries: number } | { ok: false; badLine: number } {
