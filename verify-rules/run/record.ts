@@ -15,7 +15,7 @@ const SET_BY_RECORD = ["t", "kind", "chain"] as const;
 export function canonicalJson(v: unknown): string {
   return JSON.stringify(v, (_key, value) =>
     value !== null && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]]))
       : value);
 }
 
@@ -23,13 +23,13 @@ function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-function entries(p: RunPaths): Record<string, unknown>[] {
-  return fs.readFileSync(p.record, "utf8").split("\n").filter((line) => line !== "").map((line) => JSON.parse(line));
+// The chain hash on the last line of the record's text: 64 zeros for an empty record.
+function headOf(text: string): string {
+  return text === "" ? EMPTY_HEAD : String(JSON.parse(text.slice(text.lastIndexOf("\n", text.length - 2) + 1)).chain);
 }
 
 export function chainHead(p: RunPaths): string {
-  const all = entries(p);
-  return all.length === 0 ? EMPTY_HEAD : String(all[all.length - 1].chain);
+  return headOf(fs.readFileSync(p.record, "utf8"));
 }
 
 // Adds one entry, holding the run folder's lock, and returns its chain hash: the SHA-256 of the previous hash
@@ -39,8 +39,9 @@ export function append(p: RunPaths, kind: string, fields: Record<string, unknown
   if (taken.length > 0) throw new Error(`an entry's ${taken.join(" and ")} is set by the record, not by its fields`);
   const entry = { ...fields, t: utcSeconds(now), kind };
   return withLock(p, () => {
-    const chain = sha256(chainHead(p) + canonicalJson(entry));
-    writeWhole(p.record, fs.readFileSync(p.record, "utf8") + canonicalJson({ ...entry, chain }) + "\n");
+    const text = fs.readFileSync(p.record, "utf8");
+    const chain = sha256(headOf(text) + canonicalJson(entry));
+    writeWhole(p.record, text + canonicalJson({ ...entry, chain }) + "\n");
     return chain;
   });
 }
