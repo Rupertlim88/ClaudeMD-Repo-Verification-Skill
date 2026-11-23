@@ -106,3 +106,26 @@ test("a fenced block, a table and a tag are never cut, and their numbers and key
   assert.deepEqual(pieces(t, firstCut(t)), ["1. **The API has a spec.** *(NIST REC-API-1, REC-API-2)* ", t.slice(t.indexOf("It lists:"))]);
   assert.deepEqual(checkClauses(t, firstCut(t)), { ok: true, clauses: 2, floor: 2, problems: [] });
 });
+
+test("a clause list that leaves out a fenced block's or a table's words fails", () => {
+  const t = "- **It lists.** These:\n\n  ```\n  alpha beta\n  ```\n\n  | gamma |\n";
+  assert.equal(checkClauses(t, [[0, 16], [16, t.indexOf("\n\n  ```")]]).ok, false);
+});
+
+test("numbers and keywords inside a fenced block never force a cut", () => {
+  const t = "- **It sends.** This:\n\n  ```\n  GET /a 200 404 only never\n  ```\n";
+  assert.deepEqual(pieces(t, firstCut(t)), ["- **It sends.** ", t.slice(t.indexOf("This:"))]);
+});
+
+test("the cut between two markers never falls inside a number", () => {
+  const t = "It uses 5,000 steps and 8 copies.";
+  assert.deepEqual(pieces(t, firstCut(t)), ["It uses 5,000 steps and ", "8 copies."]);
+});
+
+test("an empty span is no clause", () =>
+  assert.ok(checkClauses("Never stop. Go.", [[0, 12], [12, 12], [12, 15]]).problems.some((p) => /not inside the text/.test(p))));
+
+test("the cut between two markers goes after the last comma between them", () => {
+  const t = "It uses 5 steps, slowly, and 8 copies.";
+  assert.deepEqual(pieces(t, firstCut(t)), ["It uses 5 steps, slowly, ", "and 8 copies."]);
+});

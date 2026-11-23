@@ -223,3 +223,47 @@ test("readAll reads every CLAUDE.md against the global one; two rules with the s
   const threes = [...all.values()].flatMap((r) => r.rules).filter((r) => r.number === 3);
   assert.deepEqual(threes.map((r) => r.key), ["CLAUDE.md::Test first, always.", "a/CLAUDE.md::Rule in a.", "b/CLAUDE.md::Rule in b."]);
 });
+
+// A small global with no System Rules block, as in senior-thesis-research.
+const SMALL_GLOBAL = "# G\n\n## What the CLAUDE.md files are\nSummary.\n\n## Rules\n\n" +
+  "1. **Never change a CLAUDE.md unless the user directly asks you to.** Rest.\n";
+const readSmall = (text: string) => readClaudeMd("x/CLAUDE.md", text, SMALL_GLOBAL);
+
+test("a heading ends a rule even when a line follows it with no blank line", () => {
+  const res = readSmall("## A\n\n- **One.**\n## B\n  *File:* `x.py`\n");
+  assert.deepEqual(res.problems.map((p) => p.problem), ["a file line is not directly under its rule's text"]);
+  assert.equal(res.rules[0].endLine, 3);
+});
+
+test("a line straight after a file line is stray, not the rule's text", () =>
+  assert.deepEqual(readSmall("## A\n\n- **One.** Text.\n  *File:* `a.py`\nAfter the file line.\n").stray.map((s) => s.line), [5]));
+
+test("the bold sentence is the first bold span, not up to the last", () =>
+  assert.equal(readSmall("## A\n\n18. **Mode switch.** The mode is: **test**.\n").rules[0].bold, "Mode switch."));
+
+test("a line of spaces is a blank line", () => {
+  const res = readSmall("## A\n\n- **One.** Text.\n   \nA paragraph.\n");
+  assert.equal(res.rules[0].endLine, 3);
+  assert.deepEqual(res.stray.map((s) => s.line), [5]);
+});
+
+test("a global with no System Rules block skips only the opening", () =>
+  assert.deepEqual(readSmall("# L\n\n## What the CLAUDE.md files are\nSummary.\n\n## Own\n\n- **Own.**\n").skipped,
+    [{ kind: "copied opening", start: 3, end: 4 }]));
+
+test("a global whose last section is the System Rules block is read", () => {
+  const global = SMALL_GLOBAL + "\n## System Rules\n\n- Plain words.\n";
+  assert.deepEqual(readClaudeMd("CLAUDE.md", global, global).skipped.map((s) => s.kind), ["global summary", "system rules block"]);
+});
+
+test("a line that starts '-x' or '1.5' is no item", () =>
+  assert.deepEqual(readSmall("## A\n\n-x is not a bullet\n1.5 is not a number item\n").rules, []));
+
+test("a fence of four backticks is closed only by four", () => {
+  const res = readSmall("## A\n\n- **One.** It shows:\n  ````\n  ```\n- **Not a rule.**\n  ```\n  ````\n- **Two.**\n");
+  assert.deepEqual(res.rules.map((r) => r.bold), ["One.", "Two."]);
+});
+
+test("the line after a skipped unit is read", () =>
+  assert.deepEqual(readSmall("# L\n\n## What the CLAUDE.md files are\nSummary.\n- **Straight after the opening.**\n").rules.map((r) => r.bold),
+    ["Straight after the opening."]));
