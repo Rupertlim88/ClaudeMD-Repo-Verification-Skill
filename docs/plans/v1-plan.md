@@ -24,7 +24,9 @@
 - One dependency file: `verify-rules/package.json`, every version exact (`npm install --save-exact`), with its lockfile. The tools use nothing else but Node's standard library, git, the `claude` CLI, and the target repo's own interpreter and test runner. `code/python_ast.py` uses the Python standard library only and always runs with `-I`.
 - Everything is built test-first with superpowers:test-driven-development: the failing test is seen failing, then the least code passes it. Tests live in `verify-rules/tests/`, mirroring the tool folders. Python adapter tests use `VR_TEST_PYTHON` (default `python3`; measured: 3.13.18 with pytest 9.1.1).
 - The run folder is outside the repo being checked. Nothing a run makes enters that repo apart from empty checkpoint commits and their trailers on the run's own branch.
-- Every state file is written whole: to `<path>.partial`, then renamed.
+- Every state file is written whole: to `<path>.<process id>.partial`, flushed to disk, then renamed.
+- Every read-modify-write of the run folder holds the run folder's lock (`withLock`, Task 1); `append` and `updateState` take it themselves, and a writer that changes two files (an answer in the record and the state) holds it around both. The lock is never held while a child process runs.
+- The gate reads the state only through `checkedState` (Task 2) and the questions only through `questions` (Task 4), which check them against the record.
 - The doer never writes a verdict, a probability, a checker's state, a checker's prompt, a Jev question, a mutation, a clause list, a coverage table, the record or the report's first line (SKILL: core 8; SKILL: never). Every tool's public functions take raw inputs (files, tables, transcripts), never verdict text.
 - Questions are in positive form and one request is about one item (tools: State-builder 7, 8).
 - Claude model ids are explicit and never aliases; a checker's model differs from the doer's (tools: Gate job1.2). The command line is `claude -p --model <id> --disable-slash-commands --strict-mcp-config --no-session-persistence --output-format json`, never `--bare` (tools: Launcher 10).
@@ -148,7 +150,7 @@ Sizes: **S** up to about 150 lines of code and tests, **M** 150 to 400, **L** mo
 
 ### Task 1: Scaffold, the run folder and the state (M)
 
-**Carries out:** tools: Run folder and state 1–3, 5–16; SKILL: core 15; SKILL: step 0 (run folder first); branch: long-job-duties.md (saving as it goes).
+**Carries out:** tools: Run folder and state 1–3, 5–16 (16 with several writers at once, through the lock); SKILL: core 15; SKILL: step 0 (run folder first); branch: long-job-duties.md (saving as it goes).
 
 **Files:**
 - Create: `verify-rules/package.json`, `package-lock.json`, `tsconfig.json`, `.gitignore`, `run/state.ts`, `tests/helpers/tmp.ts`, `tests/run/state.test.ts`
@@ -157,15 +159,18 @@ Sizes: **S** up to about 150 lines of code and tests, **M** 150 to 400, **L** mo
 - Consumes: nothing.
 - Produces:
 ```ts
-export type StepId = "0" | "7" | "tie" | "8" | "9" | "14";
-export interface RunPaths { root: string; state: string; record: string; questions: string; status: string;
+// Every closed list is one `as const` array, and its type is derived from it.
+export const STEP_IDS = ["0", "7", "tie", "8", "9", "14"] as const;          export type StepId = (typeof STEP_IDS)[number];
+export const ITEM_STATES = ["not started", "in progress", "done", "passed", "failed", "reopened"] as const;
+export type ItemStatus = (typeof ITEM_STATES)[number];
+// in the same way: FINDING_LABELS, FINDING_KINDS, FINDING_GROUPS, SITUATIONS, STEP_RESULTS and REASON_CODES
+export function isOneOf<T extends string>(list: readonly T[], value: unknown): value is T
+export interface RunPaths { root: string; state: string; record: string; questions: string; status: string; lock: string;
   tables: string; jev: string; checkers: string; packs: string; evidence: string; worktree: string }
-export interface ItemState { status: "not started" | "in progress" | "done" | "passed" | "failed" | "reopened";
-  answers: { check: string; by: string; verdict: string; ref: string }[] }
-export interface Finding { id: string; where: string; what: string; label: "measured" | "inferred";
-  kind: "gap to implement" | "gap to check" | "not testable here" | "extra piece" | "another rule's job" |
-        "broken tie" | "classification" | "known failure" | "other";
-  group: "A" | "B1" | "B2" | "C" | null; source: string }
+export interface Answer { check: string; by: string; verdict: string }
+export interface ItemState { status: ItemStatus; answers: (Answer & { entry: string })[] }   // entry: the record entry's chain hash
+export interface Finding { id: string; where: string; what: string; label: (typeof FINDING_LABELS)[number];
+  kind: (typeof FINDING_KINDS)[number]; group: (typeof FINDING_GROUPS)[number] | null; source: string }
 export interface RunState { repo: string; scope: string; startCommit: string; baseline: string; baselineHow: string;
   branch: string; doerModel: string; step: StepId | null; round: number; stepStartCommit: string | null;
   items: Record<string, ItemState>; testCommands: { name: string; command: string; exit: number; outputFile: string }[];
@@ -174,19 +179,21 @@ export interface RunState { repo: string; scope: string; startCommit: string; ba
            claudeSeconds: number; claudeListUsd: number };
   open: OpenItem[]; declined: DeclinedItem[];
   agents: { id: string; folder: string; started: string; reported: boolean; note: string }[];
-  mistakes: Record<string, number>; situation: { guess: "A" | "B" | "C" | "D"; counts: Record<string, number> } | null;
-  steps: Partial<Record<StepId, { result: "passed" | "failed" | "failed, continued by user" | "not run"; rounds: number }>> }
+  mistakes: Record<string, number>; situation: { guess: (typeof SITUATIONS)[number]; counts: Record<string, number> } | null;
+  steps: Partial<Record<StepId, { result: (typeof STEP_RESULTS)[number]; rounds: number }>> }
 export interface RunView { paths: RunPaths; state: RunState; copyRoot: string; table<T>(name: string): T | null }
-export type ReasonCode = "user-unanswered" | "user-deferred" | "needs-user-only-fact" | "budget-refused" | "other-owner"
-  | "continued-by-user" | "doer-deferred" | "later-version";
+export type ReasonCode = (typeof REASON_CODES)[number];
 export interface OpenItem { item: string; code: ReasonCode; evidence: string; needsPutOffQuestion: boolean }
 export interface DeclinedItem { item: string; line: string; userWords: string; step: StepId; date: string }
-export function createRun(repoName: string, startedAt: Date, base: string, repoRoot: string): RunPaths
+export function createRun(repoName: string, startedAt: Date, base: string, repoRoot: string): RunPaths  // repoName: one folder name
 export function openRun(root: string): RunPaths
+export function utcSeconds(time: Date): string
+export function within(folder: string, file: string): boolean
 export function writeWhole(path: string, text: string): void
-export function readState(p: RunPaths): RunState
-export function saveState(p: RunPaths, s: RunState): void
-export function saveTable(p: RunPaths, name: string, value: unknown): void
+export function withLock<T>(p: RunPaths, work: () => T): T             // <root>/lock, made "wx", holding the pid; stale locks removed
+export function readState(p: RunPaths): RunState                        // as written; the gate reads checkedState (Task 2)
+export function updateState<T>(p: RunPaths, change: (s: RunState) => T): T   // read, change, write whole, under the lock
+export function saveTable(p: RunPaths, name: string, value: unknown): void   // name: one file name
 export function readTable<T>(p: RunPaths, name: string): T | null
 ```
 
@@ -203,11 +210,14 @@ test("createRun refuses a run folder inside the repo", () => {
   const repo = makeRepo({ "a.py": "x\n" });
   assert.throws(() => createRun("r", new Date(), path.join(repo, "runs"), repo), /outside the repo/);
 });
-test("writeWhole leaves no partial file, and a stale partial file never replaces the state", () => {
-  writeWhole(f, "new"); assert.ok(!fs.existsSync(f + ".partial"));
-  fs.writeFileSync(f + ".partial", "{broken"); assert.deepEqual(readState(p), saved);
+test("writeWhole puts a new file in place of the old one, never writing into the old one", () => {
+  fs.writeFileSync(f, "old"); fs.linkSync(f, `${f}.before`); writeWhole(f, "new");
+  assert.equal(fs.readFileSync(`${f}.before`, "utf8"), "old");
 });
-test("saveState then readState round-trips the state", () => { saveState(p, s); assert.deepEqual(readState(p), s); });
+test("writers in four processes at once each put a whole file in place, and leave no partial file", async () => { … });
+test("a lock whose process no longer runs is stale, and is removed", () => { … });
+test("updateState then readState round-trips the state", () => { updateState(p, (old) => Object.assign(old, s)); assert.deepEqual(readState(p), s); });
+test("four processes changing the state at once lose no change", async () => { … });
 test("a table is saved whole under tables/ and read back; a missing table reads as null", () => {
   saveTable(p, "clauses-R1", { a: 1 }); assert.deepEqual(readTable(p, "clauses-R1"), { a: 1 });
   assert.equal(readTable(p, "nothing"), null);
@@ -215,13 +225,13 @@ test("a table is saved whole under tables/ and read back; a missing table reads 
 ```
 
 - [ ] **Step 3: Run** `cd verify-rules && node --test tests/run/state.test.ts`. Expected: FAIL, `Cannot find module '../../run/state.ts'`.
-- [ ] **Step 4: Implement `run/state.ts`.** `writeWhole` writes `<path>.partial` then `fs.renameSync`. The repo check compares real paths (`fs.realpathSync`).
+- [ ] **Step 4: Implement `run/state.ts`.** `writeWhole` writes `<path>.<process id>.partial`, flushes it (`fs.fsyncSync`), then `fs.renameSync`. The repo check compares the final run folder's real path (`fs.realpathSync`). Tests with several writers at once start child processes through `tests/helpers/at-once.ts` and `tests/helpers/race.ts`.
 - [ ] **Step 5: Run** `npm test && npm run typecheck`. Expected: PASS.
 - [ ] **Step 6: Commit** `git add verify-rules/package.json verify-rules/package-lock.json verify-rules/tsconfig.json verify-rules/.gitignore verify-rules/run/state.ts verify-rules/tests/helpers/tmp.ts verify-rules/tests/run/state.test.ts` and `git commit -m "verify-rules: run folder and state, written whole"`.
 
 ### Task 2: The record as a chain of hashes (S)
 
-**Carries out:** tools: Record 3.1–3.5, 6–10; tools: Evidence 17; SKILL: never "writes … the record"; branch: resume.md (chain against trailers).
+**Carries out:** tools: Record 3.1–3.5 (3.3's check; failing the step on it is Tasks 24 and 32), 6–10 (the record's format and its checks; the gate writes the entries in Tasks 24–26 and 31); tools: Record 7 and Evidence 17 (answers and verdicts name their captured output by hash; finished in Tasks 25 and 26); SKILL: never "writes … the record"; branch: resume.md (chain against trailers).
 
 **Files:** Create `run/record.ts`, `tests/run/record.test.ts`.
 
@@ -229,12 +239,23 @@ test("a table is saved whole under tables/ and read back; a missing table reads 
 - Consumes: `RunPaths`, `writeWhole` (Task 1).
 - Produces:
 ```ts
+export interface Captured { file: string; sha256: string }               // a file in the run folder, named from it
+export type Entry = { kind: string; chain: string; [field: string]: unknown };
 export function canonicalJson(v: unknown): string                       // keys sorted at every depth
-export function append(p: RunPaths, kind: string, fields: Record<string, unknown>, now?: Date): string  // returns the new chain hash
+export function capture(p: RunPaths, file: string): Captured
+export function append(p: RunPaths, kind: string, fields: Record<string, unknown>, now?: Date): string
+  // returns the new chain hash; holds the lock; refuses fields t, kind, chain; an "answer" or "verdict" must carry
+  // output: Captured, still matching its file
+export function addAnswer(p: RunPaths, item: string, a: Answer, outputFile: string, now?: Date): string
+  // the answer entry and the state's answer naming it, under one lock
+export function checkedState(p: RunPaths): RunState                     // refuses an answer no answer entry holds
+export function entries(p: RunPaths): Entry[]                           // chain-checked; throws on a broken chain
 export function chainHead(p: RunPaths): string                          // 64 zeros when empty
-export function verifyChain(p: RunPaths): { ok: true; head: string; entries: number } | { ok: false; badLine: number }
-export function trailers(step: StepId, round: number, head: string): string[]
-export function verifyTrailers(p: RunPaths, repoDir: string, branch: string): { ok: boolean; mismatches: string[] }
+export type RecordCheck = { ok: true; head: string; entries: number } | { ok: false; problem: string };
+export function verifyRecord(p: RunPaths, repoDir: string, branch: string): RecordCheck
+  // the chain, then every captured output re-hashed, then this run's trailers on the branch
+export function trailers(p: RunPaths, step: StepId, round: number): string[]
+  // Verify-Rules-Run: <run folder name>, -Step, -Round, -Record: the head at that moment
 ```
 
 - [ ] **Step 1: Write the failing tests:**
@@ -244,26 +265,36 @@ test("each entry carries the SHA-256 of the previous hash and its own sorted JSO
   const h2 = append(p, "verdict", { b: 2 }, t0);
   assert.equal(h2, sha256(h1 + canonicalJson({ t: "2026-11-23T05:48:54Z", kind: "verdict", b: 2 })));
 });
-test("verifyChain finds an edited entry by its line", () => { editLine(p.record, 2); assert.deepEqual(verifyChain(p), { ok: false, badLine: 2 }); });
-test("trailers name the step, the round and the record's hash", () =>
-  assert.deepEqual(trailers("7", 2, "ab".repeat(32)), ["Verify-Rules-Step: 7", "Verify-Rules-Round: 2", `Verify-Rules-Record: ${"ab".repeat(32)}`]));
-test("verifyTrailers passes when every trailer is a chain hash in order, and names a commit whose trailer is not", () => { … });
+test("verifyRecord names an edited entry by its line", () => { editLine(p.record, 2); assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 does not follow from the line before it" }); });
+test("trailers name the run, the step, the round and the record's hash at that moment", () => { … });
+test("verifyRecord passes when every trailer is a chain hash in order, and names a commit whose trailer is not", () => { … });
+test("verifyRecord checks only this run's checkpoints, so an earlier run's in the branch's history does not fail it", () => { … });
+test("verifyRecord fails a verdict whose captured file is changed or missing", () => { … });
+test("checkedState refuses an answer typed into the state that no answer entry of the record holds", () => { … });
+test("four processes appending at once lose no entry, and the chain verifies", async () => { … });
 test("canonicalJson sorts keys at every depth", () => assert.equal(canonicalJson({ b: { d: 1, c: 2 }, a: 3 }), '{"a":3,"b":{"c":2,"d":1}}'));
 ```
 - [ ] **Step 2: Run** `node --test tests/run/record.test.ts`. Expected: FAIL, module not found.
-- [ ] **Step 3: Implement `run/record.ts`.** The record is append-only JSON lines (`record.jsonl`); `verifyTrailers` reads `git log --format=%B <branch>` in order and checks each `Verify-Rules-Record:` value is a chain hash appearing later than the previous one.
+- [ ] **Step 3: Implement `run/record.ts`.** The record is append-only JSON lines (`record.jsonl`), written whole; `verifyRecord` reads `git log --reverse <branch> --` and checks that each of this run's `Verify-Rules-Record:` values is a chain hash later than the previous one.
 - [ ] **Step 4: Run** `npm test && npm run typecheck`. Expected: PASS.
 - [ ] **Step 5: Commit** `run/record.ts` and its test: `"verify-rules: the record, a chain of hashes with checkpoint trailers"`.
 
 ### Task 3: The status file (S)
 
-**Carries out:** tools: Status writer 1–5; tools: Budget 5; SKILL: core 15; branch: long-job-duties.md (live progress).
+**Carries out:** tools: Status writer 1–3, 5, and 4's "Long jobs" section (the gate names its jobs from Task 24); tools: Budget 5; SKILL: core 15; branch: long-job-duties.md (live progress). The top lines also print the record's hash, so the user holds copies a rewrite cannot change (review N1: partial protection, as far as someone compares them).
 
 **Files:** Create `run/status.ts`, `tests/run/status.test.ts`.
 
 **Interfaces:**
-- Consumes: `RunState`, `RunPaths` (Task 1).
-- Produces: `export function statusLines(s: RunState, now: Date, doing: string, unpaid: { checks: number; usd: number }, events: string[]): string[]` and `export function writeStatus(p: RunPaths, …same…): void`.
+- Consumes: `RunState`, `RunPaths` (Task 1); `checkedState`, `chainHead` (Task 2); `questions`, `LoggedQuestion` (Task 4); `WAITING_ON_USER` (Task 5).
+- Produces:
+```ts
+export interface Job { name: string; progressFile: string }
+export interface Moment { now: Date; doing: string; unpaid: { checks: number; usd: number }; jobs: readonly Job[]; events: readonly string[] }
+export interface StatusView extends Moment { state: RunState; questions: readonly LoggedQuestion[]; head: string }
+export function statusLines(v: StatusView): string[]
+export function writeStatus(p: RunPaths, m: Moment): void   // reads checkedState, questions and chainHead from the run folder
+```
 
 - [ ] **Step 1: Write the failing tests:**
 ```ts
@@ -284,38 +315,46 @@ test("an item state outside the six allowed ones is refused", () => assert.throw
 
 ### Task 4: The question log (S)
 
-**Carries out:** tools: Question log 1–3; branch: asking-the-user.md (three kinds); branch: reading-approvals.md (logged at once, word for word).
+**Carries out:** tools: Question log 1 (Question log 2 is Task 23's, and Question log 3 moved to Task 23); branch: asking-the-user.md (three kinds); branch: reading-approvals.md (logged at once, word for word).
 
 **Files:** Create `run/question-log.ts`, `tests/run/question-log.test.ts`.
 
 **Interfaces:**
 - Produces:
 ```ts
-export type MessageKind = "a" | "b" | "c";
+export const MESSAGE_KINDS = ["a", "b", "c"] as const;  export type MessageKind = (typeof MESSAGE_KINDS)[number];
 export interface LoggedQuestion { id: string; kind: MessageKind; topic: string; text: string; recommendation: string | null;
-  askedAt: string; answer: string | null; answerMessageId: string | null; answeredAt: string | null; idNote: string | null; report: string | null }
-export function logQuestion(p: RunPaths, q: { kind: MessageKind; topic: string; text: string; recommendation: string | null }, now?: Date): LoggedQuestion
-export function recordAnswer(p: RunPaths, id: string, answer: string, messageId: string | null, at: string): LoggedQuestion
+  items: string[]; askedAt: string; askedMessageId: string | null;
+  answer: string | null; answerMessageId: string | null; answeredAt: string | null; idNote: string | null; report: string | null }
+export function logQuestion(p: RunPaths, q: { kind: MessageKind; topic: string; text: string; recommendation: string | null;
+  items: readonly string[] }, now?: Date): LoggedQuestion                 // items: the item ids the question covers
+export function setAskedMessageId(p: RunPaths, id: string, messageId: string): LoggedQuestion   // set by the gate, once
+export function recordAnswer(p: RunPaths, id: string, answer: string, messageId: string | null, at: Date): LoggedQuestion
+export function recordReport(p: RunPaths, id: string, report: string): LoggedQuestion           // the chat report that followed
 export function questions(p: RunPaths): LoggedQuestion[]
 ```
+Every change is appended to the record as a `question` entry holding the question's new version, under the lock, and the log file is then written whole from the record. `questions` reads the record, and refuses a log file with a line the record never held.
 
 - [ ] **Step 1: Write the failing tests:**
 ```ts
-test("a question is written the moment it is logged, with its kind, exact text and recommendation", () => {
-  const q = logQuestion(p, { kind: "b", topic: "budgets", text: "What may this run spend?", recommendation: "$5" });
+test("a question is written the moment it is logged, with its kind, exact text, recommendation and the items it covers", () => {
+  const q = logQuestion(p, { kind: "b", topic: "budgets", text: "What may this run spend?", recommendation: "$5", items: [] });
   assert.deepEqual(questions(p).map(x => x.text), ["What may this run spend?"]);
 });
-test("an answer is recorded word for word with its message id, once", () => {
+test("an answer is recorded word for word with its message id and time, once", () => {
   recordAnswer(p, q.id, "  $5 and 20 Claude runs ", "uuid-1", t);
   assert.equal(questions(p)[0].answer, "  $5 and 20 Claude runs ");
-  assert.throws(() => recordAnswer(p, q.id, "again", "uuid-2", t), /already answered/);
+  assert.throws(() => recordAnswer(p, q.id, "again", "uuid-2", t), /already has its answer/);
 });
 test("with no readable message id, the time is kept and the entry says the id could not be read", () => {
   assert.equal(recordAnswer(p, q.id, "ok", null, t).idNote, "the message id could not be read");
 });
-test("a message of no kind is refused", () => assert.throws(() => logQuestion(p, { kind: "d" as never, topic: "", text: "", recommendation: null })));
+test("a message of no kind is refused", () => assert.throws(() => logQuestion(p, { kind: "d" as never, topic: "", text: "", recommendation: null, items: [] })));
+test("the gate sets the id of the message the question was sent in, once; the chat report that followed is kept, once", () => { … });
+test("every change to a question is chained into the record as the question's new version", () => { … });
+test("a question log edited by hand is refused, and nothing more is written over it", () => { … });
 ```
-- [ ] **Step 2: Run** and see it fail. **Step 3: Implement** (JSON lines rewritten whole on every change). **Step 4: Run** `npm test && npm run typecheck`: PASS. **Step 5: Commit**: `"verify-rules: the question log"`.
+- [ ] **Step 2: Run** and see it fail. **Step 3: Implement** (each change chained into the record; the log file rewritten whole from it). **Step 4: Run** `npm test && npm run typecheck`: PASS. **Step 5: Commit**: `"verify-rules: the question log"`.
 
 ### Task 5: Open items, declined items and their trailers (S)
 
@@ -324,31 +363,38 @@ test("a message of no kind is refused", () => assert.throws(() => logQuestion(p,
 **Files:** Create `run/open-items.ts`, `tests/run/open-items.test.ts`.
 
 **Interfaces:**
-- Consumes: `ReasonCode`, `OpenItem`, `DeclinedItem`, `StepId` (Task 1); `LoggedQuestion` (Task 4).
+- Consumes: `ReasonCode`, `REASON_CODES`, `OpenItem`, `DeclinedItem`, `StepId`, `readState` (Task 1); `questions`, `LoggedQuestion` (Task 4).
 - Produces:
 ```ts
 export class Refused extends Error {}
-export function setOpen(item: string, code: ReasonCode, ctx: { questions: LoggedQuestion[]; shippedChecks: ReadonlySet<string>;
-  check: string; questionId?: string; ownerEvidence?: string }): OpenItem
-export function declinedTrailer(d: DeclinedItem): string                      // "Verify-Rules-Declined: <line>"
-export function readDeclinedTrailers(repoDir: string, branch: string): string[]
+export const WAITING_ON_USER: ReadonlySet<ReasonCode>;
+export const CONTINUE_SENTENCE = "If you continue, this step stays unchecked.";
+export type Checks = Readonly<Record<string, "shipped" | "later">>;          // every check, by the item-id prefix it checks
+export type PutOff =
+  | { code: "user-unanswered" | "user-deferred" | "needs-user-only-fact" | "budget-refused" | "continued-by-user"; question: string }
+  | { code: "other-owner"; owner: string }                                  // a git ref, or a file inside the repo
+  | { code: "later-version"; checks: Checks }
+  | { code: "doer-deferred" };
+export function checkOf(item: string): string                               // the id up to its first colon: "7.clause"
+export function setOpen(p: RunPaths, item: string, putOff: PutOff): OpenItem  // reads the question log and the repo itself
+export function declinedTrailer(d: DeclinedItem): string                      // "Verify-Rules-Declined: <line>", CR and LF folded
+export function readDeclinedTrailers(repoDir: string, branch: string): string[]   // the trailers' values, oldest first
 export function firstLineCounts(open: OpenItem[], declined: DeclinedItem[]): { open: number; waiting: number; doer: number; other: number; declined: number }
 ```
 
 - [ ] **Step 1: Write the failing tests:**
 ```ts
-test("user-unanswered needs the question's log entry", () => {
-  assert.throws(() => setOpen("7.c3", "user-unanswered", ctx({ questions: [] })), Refused);
-  assert.equal(setOpen("7.c3", "user-unanswered", ctx({ questions: [q], questionId: q.id })).evidence, `question ${q.id}`);
-});
-test("user-deferred, budget-refused and continued-by-user need the user's words in the log", () => { … });
-test("later-version needs the check to be missing from the version's shipped checks", () => {
-  assert.throws(() => setOpen("tie.p4:dup", "later-version", ctx({ check: "tie.p4.mutation", shippedChecks: new Set(["tie.p4.mutation"]) })), Refused);
-});
+test("user-unanswered needs a question in the log that names the item, was seen sent, and has no answer", () => { … });
+test("one question cannot put off items it does not name", () => { … });
+test("budget-refused needs the user's answer to a question of kind b, never a list's approval", () => { … });
+test("continued-by-user needs the user's answer to the script's continue question, of kind b", () => { … });
+test("other-owner needs a git ref or a file in the repo that exists", () => { … });
+test("later-version takes the check from the item's id, and needs it to be a check of a later version", () => { … });
+test("a code outside the fixed list is refused", () => { … });
 test("doer-deferred needs no evidence, and is marked for the put-off question", () =>
-  assert.equal(setOpen("8.f2", "doer-deferred", ctx({})).needsPutOffQuestion, true));
-test("a declined item's trailer is one line", () =>
-  assert.equal(declinedTrailer(d("C3. Keep the whole-folder mark\nsecond line")), "Verify-Rules-Declined: C3. Keep the whole-folder mark second line"));
+  assert.equal(setOpen(p, "8.finding:f2", { code: "doer-deferred" }).needsPutOffQuestion, true));
+test("a declined item's trailer is one line, whatever its line ends", () =>
+  assert.equal(declinedTrailer(d("C3. Keep the mark\r\nsecond\rthird\nfourth")), "Verify-Rules-Declined: C3. Keep the mark second third fourth"));
 test("readDeclinedTrailers reads every declined item from the branch's commit messages", () => { … });
 test("first-line counts: waiting = user-unanswered and needs-user-only-fact; doer = doer-deferred; other = the rest", () =>
   assert.deepEqual(firstLineCounts(mix, [d1]), { open: 5, waiting: 2, doer: 1, other: 2, declined: 1 }));
@@ -931,7 +977,7 @@ test("each run's seconds and total_cost_usd are recorded apart from the budgets"
 **Files:** Create `run/budget.ts`, `tests/run/budget.test.ts`.
 
 **Interfaces:**
-- Consumes: `BudgetKeeper` type (Task 17); `RunState` (Task 1); `logQuestion` (Task 4).
+- Consumes: `BudgetKeeper` type (Task 17); `RunState`, `updateState` (Task 1); `logQuestion` (Task 4). The budget questions are kind (b); a question to raise a budget names the items it holds up in `items`, so `budget-refused` (Task 5) can cite it.
 - Produces:
 ```ts
 export interface ItemCounts { byStep: Partial<Record<StepId, { items: number; checksPerItem: number }>>; claudeRunsPerRound: number }
@@ -1017,25 +1063,27 @@ test("instructions.json is current: rebuilding it from SKILL.md, the branches an
 **Files:** Create `run/items.ts`, `tests/run/items.test.ts`.
 
 **Interfaces:**
-- Consumes: `RunView`, `StepId` (Task 1); `readDeclinedTrailers`, `setOpen` (Task 5); `QuestionType`, `BUILDERS` (Task 20); `TieReport` (Task 10); `clauseTable` (Task 7).
+- Consumes: `RunView`, `StepId`, `STEP_IDS` (Task 1); `readDeclinedTrailers`, `setOpen`, `checkOf`, `Checks` (Task 5); `QuestionType`, `BUILDERS` (Task 20); `TieReport` (Task 10); `clauseTable` (Task 7).
 - Produces:
 ```ts
 export interface Item { id: string; step: StepId; check: "correct" | "same" | "complete"; question: QuestionType;
   subject: Record<string, string>; builder: string | null }
-export const V1_STEPS: readonly StepId[];
-export const SHIPPED_CHECKS: ReadonlySet<string>;
+export const CHECKS = { "0.test": "shipped", "7.clause": "shipped", …, "14.duplicates": "later", … } as const satisfies Checks;
+  // the one owner of every check the skill has, by the item-id prefix it checks (checkOf), shipped in version 1 or later;
+  // a left-out item is put off with setOpen(p, id, { code: "later-version", checks: CHECKS })
 export function listItems(step: StepId, run: RunView): { items: Item[]; leftOut: { id: string; why: "declined" | "later-version"; detail: string }[]; empty: boolean }
 export function repoRuleKinds(rules: Rule[]): { rule: RuleRef; kinds: string[] }[]
 ```
-Item ids are stable for the same commit and inputs: `<step>.<kind>:<subject>`, for example `7.clause:R12#c3@models/lodestar`. This task lists steps 0, 7, 8, 9 and 14; Task 28 adds the tie stage's items, because they come from its scripts.
+Item ids are stable for the same commit and inputs: `<step>.<kind>:<subject>`, for example `7.clause:R12#c3@models/lodestar`. The part before the colon is the item's check (`checkOf`, Task 5; not `Item.check`, which is one of the three checks) and a key of `CHECKS`, so a check that is only partly in version 1 is two keys (for example `14.final` and `14.duplicates`). The steps are `STEP_IDS` (Task 1). This task lists steps 0, 7, 8, 9 and 14; Task 28 adds the tie stage's items, because they come from its scripts.
 
 - [ ] **Step 1: Write the failing tests:**
 ```ts
 test("step 7 lists every clause of every rule in scope, once per folder it covers, and every planned file's table", () => { … });
 test("a general rule's clauses get one item per folder they cover inside the scope", () => { … });
 test("a list the script counts as empty is 'none: 0 items' and sends nothing", () => assert.equal(listItems("9", runWithNoChanges).empty, true));
-test("declined items are left out and each one is listed", () => assert.deepEqual(r.leftOut, [{ id: "8.change:C3", why: "declined", detail: "Verify-Rules-Declined: C3. …" }]));
-test("an item whose check is not in version 1 is left out as later-version", () => assert.ok(listItems("14", run).leftOut.some(x => x.why === "later-version" && x.id === "14.final:duplicates")));
+test("declined items are left out and each one is listed", () => assert.deepEqual(r.leftOut, [{ id: "8.change:C3", why: "declined", detail: "C3. …" }]));
+test("an item whose check is not in version 1 is left out as later-version", () => assert.ok(listItems("14", run).leftOut.some(x => x.why === "later-version" && x.id === "14.duplicates:repo")));
+test("every item id's check is a key of CHECKS", () => { … });
 test("step 0 lists every rule whose text names a repo-rule kind", () =>
   assert.deepEqual(repoRuleKinds(rules).map(x => x.kinds), [["branch", "pull request", "merge"], ["long job"], ["account"]]));
 test("ids are stable: listing twice gives the same ids", () => assert.deepEqual(ids(listItems("7", run)), ids(listItems("7", run))));
@@ -1076,12 +1124,12 @@ test("reveal returns the key once, after which canaries are added to the calibra
 
 ### Task 23: The conversation check (M)
 
-**Carries out:** tools: Gate job4.1–4.3; tools: Conversation check 1–5; tools: Question log 2; branch: reading-approvals.md (approvals in the live transcript); branch: resume.md (never act on a remembered approval).
+**Carries out:** tools: Gate job4.1–4.3; tools: Conversation check 1–5; tools: Question log 2, 3 (moved here from Task 4: a change merged from main through someone else's reviewed pull request is logged with that pull request's link as its approval); branch: reading-approvals.md (approvals in the live transcript); branch: resume.md (never act on a remembered approval).
 
-**Files:** Create `run/conversation.ts`, `tests/run/conversation.test.ts`, `tests/fixtures/transcript.jsonl` (made-up lines in the measured shape).
+**Files:** Create `run/conversation.ts`, `tests/run/conversation.test.ts`, `tests/fixtures/transcript.jsonl` (made-up lines in the measured shape). Modify `run/question-log.ts` (`logPullRequestApproval`) and `tests/run/question-log.test.ts`.
 
 **Interfaces:**
-- Consumes: `LoggedQuestion`, `recordAnswer` (Task 4).
+- Consumes: `LoggedQuestion`, `questions`, `recordAnswer` (its `at` is the typed message's timestamp, as a Date), `setAskedMessageId` (Task 4).
 - Produces:
 ```ts
 export interface UserMessage { uuid: string; timestamp: string; text: string }
@@ -1091,6 +1139,9 @@ export function doerModel(jsonl: string): string | null
 export function heard(jsonl: string, questionText: string): UserMessage | null
 export function confirmApproval(jsonl: string, quote: string): UserMessage | null
 export function unloggedQuestions(jsonl: string, logged: LoggedQuestion[]): string[]
+export function sentIn(jsonl: string, questionText: string): UserMessage | null   // the assistant message that holds the exact text
+// in run/question-log.ts, chained into the record like every question:
+export function logPullRequestApproval(p: RunPaths, a: { items: readonly string[]; link: string; text: string }): LoggedQuestion
 ```
 Measured in this session's transcript: a message the user typed has `type: "user"` and `origin.kind: "human"`, and is not `isMeta`, `isCompactSummary` or `isSidechain`; tool results, task notifications and peer messages have other shapes. The doer's model is `message.model` of the session's assistant entries. The session id is `CLAUDE_CODE_SESSION_ID`.
 
@@ -1104,17 +1155,19 @@ test("an approval counts only when its exact text is a typed message", () => { a
 test("the doer's model is read from the assistant entries", () => assert.equal(doerModel(FIXTURE), "claude-opus-5-5"));
 test("an unreadable transcript confirms nothing", () => assert.equal(confirmApproval("not json", "x"), null));
 test("assistant paragraphs ending in a question mark that are not in the log are listed", () => assert.deepEqual(unloggedQuestions(FIXTURE, logged), ["Should I also fix the tests?"]));
+test("sentIn finds the assistant message that holds the question's exact text, whose uuid becomes the question's askedMessageId", () => { … });
+test("a change merged from main is logged with its pull request's link as its approval, and counts as approved without a typed message", () => { … });
 ```
 - [ ] **Step 2–5:** run (fail), implement, run (pass), commit: `"verify-rules: the conversation check reads the live transcript"`.
 
 ### Task 24: The gate, part A: the start of a run (L)
 
-**Carries out:** tools: Gate 1, job1.1–1.5, job5.1–5.4, 9, 15; tools: Record 6; tools: Situation detector 7; tools: Run folder 2; SKILL: step 0 (v1 parts: run folder before any question, budgets, worktree, baseline, test commands, both checkers, situation); branch: test-commands.md, budget.md, other-people.md (worktree and uncommitted work only; the rest is milestone L11), resume.md, checker-unusable.md.
+**Carries out:** tools: Gate 1, job1.1–1.5, job5.1–5.4, 9, 15; tools: Record 6; tools: Record 3.3 (step 0: `verifyRecord`'s problem fails the step and is shown to the user); tools: Status writer 4 (each test command is a long job whose progress file the status file names); tools: Situation detector 7; tools: Run folder 2; SKILL: step 0 (v1 parts: run folder before any question, budgets, worktree, baseline, test commands, both checkers, situation); branch: test-commands.md, budget.md, other-people.md (worktree and uncommitted work only; the rest is milestone L11), resume.md, checker-unusable.md.
 
 **Files:** Create `checks/gate.ts`, `tests/checks/gate-start.test.ts`.
 
 **Interfaces:**
-- Consumes: everything from Tasks 1–23.
+- Consumes: everything from Tasks 1–23. In particular: the start facts are `append`ed (Task 2); every state read is `checkedState` and every write `updateState` (Tasks 1–2); a resume runs `verifyRecord(p, repo, branch)` (Task 2) before anything else; the status file is written with `writeStatus(p, { now, doing, unpaid, jobs, events })` (Task 3); `heardCommand` sets the question's `askedMessageId` from `sentIn` (Task 23) and then its answer with `recordAnswer` (Task 4); each checkpoint commit carries `trailers(p, step, round)` (Task 2).
 - Produces: the CLI `node checks/gate.ts <command>` and these functions:
 ```ts
 export interface StartArgs { repo: string; scope: string; python: string; tests: { name: string; command: string }[]; runsBase: string; now?: Date }
@@ -1137,19 +1190,24 @@ test("both checkers are tested through the gate: a Claude probe reporting its ow
 test("situations A and B stop the run with the plain message", async () => { … });
 test("the start facts are in the record", async () =>
   assert.deepEqual(keys(startFacts(p)), ["baseline", "budgets", "checkers", "doerModel", "jev", "knownFailures", "repo", "situation", "startCommit", "testCommands"]));
-test("start on an existing run folder verifies the chain against the trailers and resumes at the first item not passed", async () => { … });
+test("start on an existing run folder runs verifyRecord (the chain, every captured output, this run's trailers) and resumes at the first item not passed", async () => { … });
+test("a record problem at step 0 fails the step and names the problem, word for word", async () => { … });
+test("while a test command runs, the status file names its progress file under Long jobs", async () => { … });
+test("heard sets the question's sent message id from the transcript before its answer; a question never seen sent stays unanswered", async () => { … });
 test("a probe is recorded like any checker run", async () => { … });
 ```
 - [ ] **Step 2–5:** run (fail), implement, run (pass), commit: `"verify-rules: the gate starts a run"`.
 
 ### Task 25: The gate, part B: each item's three checks (L)
 
-**Carries out:** SKILL: "The checkpoint" (correct per thing done, same per item on a script's proof, complete per thing required; an item finishes only when all three pass); tools: State-builder 3, 8, 9; tools: Gate 10–14; branch: jev-unsure.md, checker-unusable.md; SKILL: never "marks its own item or step as passed".
+**Carries out:** SKILL: "The checkpoint" (correct per thing done, same per item on a script's proof, complete per thing required; an item finishes only when all three pass); tools: State-builder 3, 8, 9; tools: Gate 10–14; tools: Record 7 (every item answer is written by the gate with `addAnswer`, from the captured Jev response or checker output; the doer never types one); branch: jev-unsure.md, checker-unusable.md; SKILL: never "marks its own item or step as passed".
 
 **Files:** Modify `checks/gate.ts`. Create `tests/checks/gate-items.test.ts`.
 
 **Interfaces:**
+- Consumes: `addAnswer`, `capture`, `checkedState` (Task 2); `logQuestion` (Task 4); `CONTINUE_SENTENCE`, `setOpen` (Task 5).
 - Produces: `export async function runStep(p: RunPaths, step: StepId): Promise<{ done: number; total: number; queuedForSecond: string[] }>` (command: `run <step>`) and `export function decideItem(item: Item, script: boolean | null, jev: Reading | null, claude: "PASS" | "FAIL" | "no answer" | null, second: "PASS" | "FAIL" | null): "passed" | "failed" | "waiting"`.
+- Each answer is saved the moment it arrives with `addAnswer(p, item, answer, outputFile)`, whose output file is the saved Jev response under `jev/` or the checker's captured output under `checkers/`. The gate reads the state only with `checkedState`, and sets an item's status only from `decideItem` over its checked answers; a state whose item status does not follow from its answers is refused. The "continue?" question after a checker cannot be used is kind (b), names the step's open items in `items`, and ends with `CONTINUE_SENTENCE`, so `continued-by-user` can cite it.
 
 - [ ] **Step 1: Write the failing tests:**
 ```ts
@@ -1160,18 +1218,22 @@ test("a script failure is never overruled by a checker's yes", () => assert.equa
 test("may only fail: Jev below the fail line fails the item; above it, the script and Claude decide", () => { … });
 test("the step cannot pass until every item has a recorded answer for each check", async () => { … });
 test("each answer is saved the moment it arrives, and a rerun resumes at the first item without all its answers", async () => { … });
+test("an answer typed into state.json is refused: no answer entry of the record holds it", async () => { … });
+test("an item set to passed in state.json without the answers that pass it is refused", async () => { … });
 test("a checker that cannot be used stops the step after 3 retries and asks whether to continue", async () => { … });
 ```
 - [ ] **Step 2–5:** run (fail), implement, run (pass), commit: `"verify-rules: the gate checks each item three ways"`.
 
 ### Task 26: The gate, part C: the checkpoint round (L)
 
-**Carries out:** tools: Evidence 1–7, 9–16, 21 (8, the golden coverage tables, is milestone L7); tools: Gate job1.4–1.5, 5 (stray executables); tools: Record 3.2, 3.5; tools: Launcher 6; branch: step-fails.md, canaries.md; SKILL: "The checkpoint" (both checkers pass the step in the same round, every canary caught).
+**Carries out:** tools: Evidence 1–7, 9–16, 21 (8, the golden coverage tables, is milestone L7); tools: Evidence 17 (the pack's evidence is only what counts: command outputs, file excerpts, diffs, script tables, quoted messages with ids, saved Jev responses and captured verdicts, each captured output named by hash); tools: Gate job1.4–1.5, 5 (stray executables); tools: Record 3.2, 3.5; tools: Record 7 (each checker's step verdict is appended as a `verdict` with its captured output); tools: Launcher 6; branch: step-fails.md, canaries.md; SKILL: "The checkpoint" (both checkers pass the step in the same round, every canary caught).
 
 **Files:** Modify `checks/gate.ts`. Create `tests/checks/gate-checkpoint.test.ts`.
 
 **Interfaces:**
+- Consumes: `append`, `capture`, `checkedState`, `trailers`, `verifyRecord` (Task 2); `withLock`, `updateState` (Task 1); `logQuestion` (Task 4); `CONTINUE_SENTENCE` (Task 5).
 - Produces: `export async function checkpoint(p: RunPaths, step: StepId): Promise<{ round: number; result: "passed" | "failed" | "void"; failing: string[]; commit: string }>` (command: `checkpoint <step>`) and `export function buildPack(view: RunView, step: StepId, round: CanaryRound): string`.
+- Each Claude checker's step verdict is `append`ed as `verdict` with `output: capture(p, "checkers/<run>.json")`, before the canary key is revealed; the checkpoint commit's message ends with `trailers(p, step, round)`. The "continue?" question after 3 rounds is kind (b), names the failing items in `items`, and ends with `CONTINUE_SENTENCE`.
 
 - [ ] **Step 1: Write the failing tests:**
 ```ts
@@ -1180,11 +1242,13 @@ test("canaries appear in the pack laid out like real items, unmarked", () => { �
 test("the verdict is the parser's, with canaries left out; the step passes only if every item passed, both checkers passed the step in this round, and every canary was caught", async () => { … });
 test("a passed canary voids the round; void rounds count; after 3 rounds the run asks whether to continue, with the script-written message", async () =>
   assert.match(lastQuestion(p).text, /If you continue, this step stays unchecked\.$/));
-test("every verdict is chained before the key is revealed, and the checkpoint commit carries the trailers", async () => { … });
+test("every verdict is chained with its captured output before the key is revealed, and the checkpoint commit carries the trailers, its run's name first", async () => { … });
+test("a captured verdict file changed after it was chained fails the checkpoint, naming the file", async () => { … });
+test("every evidence line in the pack is one of Evidence 17's kinds; a typed claim such as 'tests pass' never is", () => { … });
 test("a step that changed no file makes an empty commit with only the trailers", async () => { … });
 test("a kill during the round leaves the state valid and the round void; the next checkpoint is the next round with new canaries", async () => {
   const child = spawnCheckpoint(p, "7"); await waitForChecker(); child.kill("SIGKILL");
-  assert.doesNotThrow(() => readState(p)); const r = await checkpoint(p, "7"); assert.equal(r.round, 2); assert.notDeepEqual(canaryIds(1), canaryIds(2));
+  assert.doesNotThrow(() => checkedState(p)); const r = await checkpoint(p, "7"); assert.equal(r.round, 2); assert.notDeepEqual(canaryIds(1), canaryIds(2));
 });
 test("a pack over 600,000 characters is refused, with its size", async () => { … });
 test("an executable file in the run folder that is not a shipped tool is listed by hash, as an item for checker 1", async () => { … });
@@ -1289,7 +1353,7 @@ test("the M header counts what the script checked, and a non-zero count is repor
 **Files:** Create `rules/lists.ts`, `tests/rules/lists.test.ts`.
 
 **Interfaces:**
-- Consumes: `Effect`, `effectOf`, `mechanicalHeader` (Task 29); `logQuestion` (Task 4).
+- Consumes: `Effect`, `effectOf`, `mechanicalHeader` (Task 29); `logQuestion` (Task 4). The lists message is logged as kind (a) with every item of both lists in `items`, so `user-unanswered` and `user-deferred` (Task 5) can cite it.
 - Produces:
 ```ts
 export interface PlannedChange { id: string; findings: string[]; kind: string; claude: string; before: string;
@@ -1326,7 +1390,7 @@ test("'ok' to an item with several options chooses nothing", () => { … });
 **Files:** Create `run/report.ts`, `tests/run/report.test.ts`.
 
 **Interfaces:**
-- Consumes: `RunState` (Task 1); `firstLineCounts` (Task 5); `TieReport` (Task 10); the record (Task 2).
+- Consumes: `RunState` (Task 1); `firstLineCounts` (Task 5); `TieReport` (Task 10); the record: `entries`, `append`, `checkedState` (Task 2); the approval quotes from `questions` (Task 4).
 - Produces: `export function firstLine(s: RunState, tie: TieReport): string`, `export function endState(s: RunState): { done: boolean; text: string }`, `export function report(p: RunPaths): string` (command: `report`).
 
 - [ ] **Step 1: Write the failing tests:**
@@ -1342,7 +1406,7 @@ test("the first line is written into the record by the gate, before the report i
 
 ### Task 32: The version-1 steps, wired end to end (L)
 
-**Carries out:** tools: Per-step checklists for steps 0, 7, 8, 9 (v1 parts), 12 (as the tie stage) and 14; tools: State-builder 12 (a fact builder per done-when item); branch: clause-audit.md (reviewers, one per CLAUDE.md, at most 40 clauses); branch: final-check-fails.md; SKILL: steps 0, 7, 8, 9, 14; SKILL: core 3 (the final check, the whole-process question, the shortcut audit).
+**Carries out:** tools: Per-step checklists for steps 0, 7, 8, 9 (v1 parts), 12 (as the tie stage) and 14; tools: Record 3.3 (step 14 runs `verifyRecord`; a problem fails the step); tools: State-builder 12 (a fact builder per done-when item); branch: clause-audit.md (reviewers, one per CLAUDE.md, at most 40 clauses); branch: final-check-fails.md; SKILL: steps 0, 7, 8, 9, 14; SKILL: core 3 (the final check, the whole-process question, the shortcut audit).
 
 **Files:** Modify `checks/questions.ts` (`FACTS` for every done-when item of the v1 steps), `checks/gate.ts` (commands `review`, `submit`, `lists`, and step 14's final check, whole-process question and shortcut audit). Create `tests/e2e/v1-run.test.ts`, `tests/helpers/honest-checker.ts`.
 
@@ -1359,7 +1423,7 @@ test("a whole version-1 run on the toy repo with honest fake checkers ends with 
 test("the same run with a fake checker that passes everything is caught: the round is void, and the second time the checker cannot be used", async () => { … });
 test("the honest fake catches every canary, and the run's findings are the toy repo's planted faults", async () => { … });
 test("a step-14 item that fails goes back to the step that owns it", async () => { … });
-test("killing the run between steps and starting it again resumes, and the record's chain matches every trailer", async () => { … });
+test("killing the run between steps and starting it again resumes, and verifyRecord passes: the chain, every captured output and every trailer of this run", async () => { … });
 ```
 `honest-checker.ts` is a fake `claude` and a fake Jev that compare each item's quoted file text with the worktree and fail any item whose text differs; it stands in for a careful checker, which the gate cannot tell from a real one.
 - [ ] **Step 2–5:** run (fail), implement, run `npm test && npm run typecheck` (pass), commit: `"verify-rules: version-1 steps wired end to end"`.
@@ -1372,7 +1436,7 @@ test("killing the run between steps and starting it again resumes, and the recor
 
 - [ ] **Step 1: Write the failing test:** `test("every command SKILL.md names is one gate help lists, and the other way round", …)`.
 - [ ] **Step 2: Run** and see it fail.
-- [ ] **Step 3: Write the section**: the commands in order (`start`, `heard`, `run 0`, `checkpoint 0`, `review`, `submit`, `run 7`, `checkpoint 7`, `run tie`, `checkpoint tie`, `run 8`, `checkpoint 8`, `lists`, `heard`, `run 9`, `checkpoint 9`, `run 14`, `checkpoint 14`, `report`), when to send the phone push (whenever the status file says one is due), and what version 1 does not do, in plain words. Implement `help` from one table both use.
+- [ ] **Step 3: Write the section**: the commands in order (`start`, `heard`, `run 0`, `checkpoint 0`, `review`, `submit`, `run 7`, `checkpoint 7`, `run tie`, `checkpoint tie`, `run 8`, `checkpoint 8`, `lists`, `heard`, `run 9`, `checkpoint 9`, `run 14`, `checkpoint 14`, `report`), when to send the phone push (whenever the status file says one is due; each push names the run folder and the status file's record hash, so the user keeps copies of the hash), and what version 1 does not do, in plain words. Implement `help` from one table both use.
 - [ ] **Step 4: Run** `npm test && npm run typecheck`. Expected: PASS.
 - [ ] **Step 5: Commit** `verify-rules/SKILL.md`, `checks/gate.ts` and the test: `"verify-rules: how to run version 1"`.
 
