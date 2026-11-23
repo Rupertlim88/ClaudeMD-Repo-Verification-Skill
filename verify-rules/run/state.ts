@@ -1,12 +1,12 @@
 // The run folder and the state: everything a run needs to go on after a stop, kept outside the repo,
-// and every file written whole.
+// every file written whole, and every read-modify-write done while holding the run folder's lock.
 import fs from "node:fs";
 import path from "node:path";
 
 export type StepId = "0" | "7" | "tie" | "8" | "9" | "14";
 
 export interface RunPaths {
-  root: string; state: string; record: string; questions: string; status: string;
+  root: string; state: string; record: string; questions: string; status: string; lock: string;
   tables: string; jev: string; checkers: string; packs: string; evidence: string; worktree: string;
 }
 
@@ -60,7 +60,7 @@ function pathsOf(root: string): RunPaths {
   const at = (name: string) => path.join(root, name);
   return {
     root, state: at("state.json"), record: at("record.jsonl"), questions: at("questions.jsonl"), status: at("status.md"),
-    tables: at("tables"), jev: at("jev"), checkers: at("checkers"), packs: at("packs"), evidence: at("evidence"),
+    lock: at("lock"), tables: at("tables"), jev: at("jev"), checkers: at("checkers"), packs: at("packs"), evidence: at("evidence"),
     worktree: at("worktree"),
   };
 }
@@ -100,7 +100,7 @@ export function createRun(repoName: string, startedAt: Date, base: string, repoR
   fs.mkdirSync(p.root);
   for (const folder of [p.tables, p.jev, p.checkers, p.packs, p.evidence]) fs.mkdirSync(folder);
   for (const file of [p.record, p.questions, p.status]) writeWhole(file, "");
-  saveState(p, freshState(repo));
+  writeWhole(p.state, stateText(freshState(repo)));
   return p;
 }
 
@@ -133,8 +133,72 @@ export function readState(p: RunPaths): RunState {
   return JSON.parse(fs.readFileSync(p.state, "utf8"));
 }
 
-export function saveState(p: RunPaths, s: RunState): void {
-  writeWhole(p.state, JSON.stringify(s, null, 2) + "\n");
+const stateText = (s: RunState) => JSON.stringify(s, null, 2) + "\n";
+
+// Reads the state, changes it and writes it whole, all while holding the run folder's lock, so no change made by
+// another process at the same time is lost. Returns what the change returns.
+export function updateState<T>(p: RunPaths, change: (s: RunState) => T): T {
+  return withLock(p, () => {
+    const s = readState(p);
+    const result = change(s);
+    writeWhole(p.state, stateText(s));
+    return result;
+  });
+}
+
+// The locks this process holds, so that a writer called inside another writer takes the lock only once.
+const held = new Set<string>();
+const pause = new Int32Array(new SharedArrayBuffer(4));
+
+// Runs the work while holding the run folder's lock: <root>/lock, made only where none exists, holding this process's
+// id. Every read-modify-write of the run folder runs inside it, so writers in several processes take turns.
+export function withLock<T>(p: RunPaths, work: () => T): T {
+  const lock = path.resolve(p.lock);
+  if (held.has(lock)) return work();
+  takeLock(lock);
+  held.add(lock);
+  try {
+    return work();
+  } finally {
+    held.delete(lock);
+    fs.rmSync(lock, { force: true });
+  }
+}
+
+function takeLock(lock: string): void {
+  for (;;) {
+    try {
+      const fd = fs.openSync(lock, "wx");
+      fs.writeFileSync(fd, String(process.pid));
+      fs.closeSync(fd);
+      return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    if (isStale(lock)) fs.rmSync(lock, { force: true });
+    else Atomics.wait(pause, 0, 0, 5);
+  }
+}
+
+// A lock is stale when the process it names no longer runs, or when it never got a process id and is over a second
+// old: its process stopped between making the file and writing the id.
+function isStale(lock: string): boolean {
+  try {
+    const holder = fs.readFileSync(lock, "utf8");
+    return holder === "" ? Date.now() - fs.statSync(lock).mtimeMs > 1000 : !isRunning(Number(holder));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false; // released meanwhile: try again
+    throw e;
+  }
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 const tableFile = (p: RunPaths, name: string) => path.join(p.tables, `${oneName(name, "a table's name")}.json`);

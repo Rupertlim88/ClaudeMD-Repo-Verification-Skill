@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
@@ -7,8 +8,9 @@ import {
   openRun,
   readState,
   readTable,
-  saveState,
   saveTable,
+  updateState,
+  withLock,
   writeWhole,
 } from "../../run/state.ts";
 import { atOnce } from "../helpers/at-once.ts";
@@ -119,16 +121,55 @@ test("writeWhole leaves no partial file, and a stale partial file never replaces
   assert.equal(fs.readFileSync(f, "utf8"), "new");
   assert.deepEqual(fs.readdirSync(p.root).filter((name) => name.endsWith(".partial")), []);
   const saved = sampleState();
-  saveState(p, saved);
+  updateState(p, (s) => Object.assign(s, saved));
   fs.writeFileSync(p.state + ".partial", "{broken");
   assert.deepEqual(readState(p), saved);
 });
 
-test("saveState then readState round-trips the state", () => {
+test("updateState then readState round-trips the state", () => {
   const p = newRun();
   const s = sampleState();
-  saveState(p, s);
+  updateState(p, (old) => Object.assign(old, s));
   assert.deepEqual(readState(p), s);
+});
+
+test("withLock holds the run folder's lock, holding this process's id, while it works, and removes it after", () => {
+  const p = newRun();
+  assert.equal(withLock(p, () => fs.readFileSync(p.lock, "utf8")), String(process.pid));
+  assert.ok(!fs.existsSync(p.lock));
+});
+
+test("a writer inside another writer in the same process takes the lock once", () => {
+  const p = newRun();
+  assert.equal(withLock(p, () => withLock(p, () => 7)), 7);
+  assert.ok(!fs.existsSync(p.lock));
+});
+
+test("the lock is removed when the work fails", () => {
+  const p = newRun();
+  assert.throws(() => withLock(p, () => { throw new Error("stop"); }), /stop/);
+  assert.ok(!fs.existsSync(p.lock));
+});
+
+test("a lock whose process no longer runs is stale, and is removed", () => {
+  const p = newRun();
+  fs.writeFileSync(p.lock, String(spawnSync(process.execPath, ["-e", ""]).pid));
+  assert.equal(withLock(p, () => fs.readFileSync(p.lock, "utf8")), String(process.pid));
+});
+
+test("a lock that never got its process id, left for over a second, is stale, and is removed", () => {
+  const p = newRun();
+  fs.writeFileSync(p.lock, "");
+  const old = new Date(Date.now() - 5000);
+  fs.utimesSync(p.lock, old, old);
+  assert.equal(withLock(p, () => 7), 7);
+});
+
+test("four processes changing the state at once lose no change", async () => {
+  const p = newRun();
+  const ends = await atOnce([1, 2, 3, 4].map(() => ["count", p.root, "50"]));
+  assert.deepEqual(ends, [1, 2, 3, 4].map(() => ({ code: 0, stderr: "" })));
+  assert.equal(readState(p).round, 200);
 });
 
 test("a table is saved whole under tables/ and read back; a missing table reads as null", () => {
