@@ -1,6 +1,6 @@
 // The clause-table builder: the first cut of a rule's text into clauses, and the check of any clause list against
 // the text and its floor. A clause is a [start, end) span of the rule's text, so it is an exact substring of it.
-import type { Rule } from "./rule-reader.ts";
+import { ruleTextLines, type Rule } from "./rule-reader.ts";
 
 export const KEYWORDS: readonly string[] =
   ["never", "only", "always", "at most", "at least", "before", "after", "each", "every", "if", "unless", "when", "until"];
@@ -17,7 +17,6 @@ const NUMBER = new RegExp(`\\b(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?\\b|\\b(?
 const WORD = /[\p{L}\p{N}]+/gu;
 const ABBREVIATION = /\b(?:e\.g|i\.e|et al|etc|vs|cf)$/i;
 const LIST_MARKER = /^(\s*)([-*+]|\d+[.)])(?=\s)/;
-const FENCE = /^\s*(`{3}|~{3})/;
 const TABLE_LINE = /^\s*\|/;
 const TAG = /\*\([^\n]*?\)\*/g;                      // such as *(NIST REC-API-3)*
 
@@ -26,23 +25,21 @@ const blank = (s: string) => s.replace(/[^\n]/g, " ");
 interface Reading { words: string; scan: string; subruleStarts: number[]; numbers: Span[]; keywords: Span[] }
 
 // The rule's text as the cut reads it, each the same length as the text. In `words`, list markers are blanked out,
-// so the rule's own list number and its sub-rules' numbers are not words. In `scan`, bold markers, fenced blocks,
-// table lines and tags are blanked out too, so none of them holds a number, a keyword or a sentence end, and no cut
-// falls inside a block, a table or a tag.
+// so the rule's own list number and its sub-rules' numbers are not words. In `scan`, bold markers, fenced blocks
+// (as the rule reader finds them), table lines and tags are blanked out too, so none of them holds a number, a
+// keyword or a sentence end, and no cut falls inside a block, a table or a tag.
 function reading(text: string): Reading {
   const words: string[] = [];
   const scan: string[] = [];
   const subruleStarts: number[] = [];
+  const kinds = ruleTextLines(text);
   let offset = 0;
-  let inFence = false;
   for (const [i, line] of text.split("\n").entries()) {
-    const fenceLine = FENCE.test(line);
-    if (inFence || fenceLine || TABLE_LINE.test(line)) {
+    if (kinds[i] === "fence" || TABLE_LINE.test(line)) {
       words.push(line);
       scan.push(blank(line));
-      if (fenceLine) inFence = !inFence;
     } else {
-      const marker = LIST_MARKER.exec(line);
+      const marker = kinds[i] === "item" ? LIST_MARKER.exec(line) : null;
       const unmarked = marker === null ? line : marker[1] + blank(marker[2]) + line.slice(marker[0].length);
       if (marker !== null && i > 0) subruleStarts.push(offset);
       words.push(unmarked);

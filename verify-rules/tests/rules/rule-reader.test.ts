@@ -142,7 +142,7 @@ test("a rule's text keeps its indented lines, fenced blocks, tables and tags who
   const text = [
     "## Shapes", "",
     "1. **A rule with a block.** *(NIST REC-API-3)* It sends:", "",
-    "   ```", "   # not a heading", "- not a rule", "   ```", "",
+    "   ```", "   # not a heading", "   - not a rule", "   ```", "",
     "   | a | b |", "   |---|---|", "",
     "   More text after a blank line.",
     "2. **Next rule.** Ends the one before.",
@@ -183,7 +183,8 @@ test("non-blank lines outside a heading, the opening, the block, a rule and a fi
   const res = read("## A\n\n- **One.** Text.\nA line straight after the rule is its text.\n\nA paragraph at the margin.\n" +
     "  An indented line after it.\n\n```\n- code outside any rule\n```\n");
   assert.equal(res.rules[0].text, "- **One.** Text.\nA line straight after the rule is its text.");
-  assert.deepEqual(res.stray, [{ line: 6, text: "A paragraph at the margin." }, { line: 7, text: "  An indented line after it." }]);
+  assert.deepEqual(res.stray, [{ line: 6, text: "A paragraph at the margin." }, { line: 7, text: "  An indented line after it." },
+    { line: 9, text: "```" }, { line: 10, text: "- code outside any rule" }, { line: 11, text: "```" }]);
   assert.equal(res.rules.length, 1);
 });
 
@@ -260,10 +261,35 @@ test("a line that starts '-x' or '1.5' is no item", () =>
   assert.deepEqual(readSmall("## A\n\n-x is not a bullet\n1.5 is not a number item\n").rules, []));
 
 test("a fence of four backticks is closed only by four", () => {
-  const res = readSmall("## A\n\n- **One.** It shows:\n  ````\n  ```\n- **Not a rule.**\n  ```\n  ````\n- **Two.**\n");
-  assert.deepEqual(res.rules.map((r) => r.bold), ["One.", "Two."]);
+  const res = readSmall("## A\n\n- **One.** It shows:\n  ````\n  ```\n  - **Not a sub-rule.**\n  ```\n  ````\n- **Two.**\n");
+  assert.deepEqual(res.rules.map((r) => [r.bold, r.endLine, r.subrules]), [["One.", 8, []], ["Two.", 9, []]]);
 });
 
 test("the line after a skipped unit is read", () =>
   assert.deepEqual(readSmall("# L\n\n## What the CLAUDE.md files are\nSummary.\n- **Straight after the opening.**\n").rules.map((r) => r.bold),
     ["Straight after the opening."]));
+
+test("a fenced block left open in a rule's text ends at the first line indented no deeper than the rule's marker", () => {
+  const res = readSmall("## A\n\n1. **One.** It sends:\n   ```\n   GET /a\n2. **Two.** Should be a rule.\n   *File:* `two.py`\n" +
+    "3. **Three.** Also.\n");
+  assert.deepEqual(res.rules.map((r) => [r.bold, r.startLine, r.endLine, r.fileLine?.line ?? null]),
+    [["One.", 3, 5, null], ["Two.", 6, 6, 7], ["Three.", 8, 8, null]]);
+  assert.deepEqual([res.stray, res.problems], [[], []]);
+});
+
+test("a fenced block still open at the end of the file is a problem, and hides no rule", () => {
+  const margin = readSmall("## A\n\n- **One.** Text.\n\n```\n\n- **Two.** Hidden.\n- **Three.** Hidden.\n");
+  assert.deepEqual(margin.problems, [{ line: 5, text: "```", problem: "a fenced block is never closed" }]);
+  assert.deepEqual(margin.stray.map((s) => s.line), [5, 7, 8]);
+  assert.deepEqual(margin.rules.map((r) => r.bold), ["One."]);
+  const inRule = readSmall("## A\n\n- **One.** It shows:\n  ```\n  code\n");
+  assert.deepEqual(inRule.problems.map((p) => [p.line, p.problem]), [[4, "a fenced block is never closed"]]);
+  assert.equal(inRule.rules[0].endLine, 5);
+});
+
+test("a fenced block at a rule's indent or the margin is in no rule: its lines are stray and no rule is read inside it", () => {
+  const res = readSmall("## A\n\n- **One.** Text:\n```\n- **Two.**\n```\n- **Three.**\n```\n```python\n- **Hidden.**\n```\n");
+  assert.deepEqual(res.rules.map((r) => [r.bold, r.startLine, r.endLine]), [["One.", 3, 3], ["Three.", 7, 7]]);
+  assert.deepEqual(res.stray.map((s) => s.line), [4, 5, 6, 8, 9, 10, 11]);
+  assert.deepEqual(res.problems, []);
+});

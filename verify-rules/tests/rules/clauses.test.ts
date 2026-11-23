@@ -129,3 +129,13 @@ test("the cut between two markers goes after the last comma between them", () =>
   const t = "It uses 5 steps, slowly, and 8 copies.";
   assert.deepEqual(pieces(t, firstCut(t)), ["It uses 5 steps, slowly, ", "and 8 copies."]);
 });
+
+test("a fence of four backticks is closed only by four, and nothing inside it is cut", () => {
+  const t = "- **Shows code.** It prints:\n\n  ````\n  ```\n  each 5 and 8 never only\n  ```\n  ````\n";
+  assert.deepEqual(pieces(t, firstCut(t)), ["- **Shows code.** ", t.slice(t.indexOf("It prints:"))]);
+});
+
+test("a fenced block left open in a rule's text ends at the first line indented no deeper than the rule's marker", () => {
+  const t = "1. **One.** It sends:\n   ```\n   GET /a\nIt never stops, each time.";
+  assert.deepEqual(pieces(t, firstCut(t)), ["1. **One.** ", "It sends:\n   ```\n   GET /a\nIt never stops, ", "each time."]);
+});
