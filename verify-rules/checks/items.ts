@@ -94,9 +94,14 @@ export function stateOf(item: TieItem, view: RepoView, report: TieReport): strin
       const target = targetOf(rule);
       const tied = report.ties.some((t) => t.rule.key === rule.key);
       const lines = brokenLines(report).filter((line) => (target !== null && line.includes(target)) || line.includes(`"${rule.bold}"`));
-      return `THE TWO-WAY TIE CHECK, RUN BY SCRIPT, FOR ONE RULE AND ITS FILE\nrule (${rule.claude}): ${rule.bold}\n` +
-        `its file line names: ${target ?? "no file"}\ntied both ways: ${tied ? "yes" : "no"}\n` +
-        `broken lines naming this rule or its file:\n${lines.join("\n") || "none"}`;
+      const exists = target !== null && (isData(target) ? view.files.some((f) => f.startsWith(target === "./" ? "" : target)) : view.files.includes(target));
+      const pass = exists && tied && lines.length === 0;
+      return `THE TWO-WAY TIE CHECK, RUN BY SCRIPT, FOR ONE RULE AND ITS FILE (part 1: a rule with no file fails)\n` +
+        `rule (${rule.claude}): ${rule.bold}\nits file line names: ${target ?? "no file"}\n` +
+        `the file exists: ${exists ? "yes" : "no"}\n` +
+        `tied both ways (its heading states the rule's bold sentence word for word, and no other rule names it): ${tied ? "yes" : "no"}\n` +
+        `broken lines naming this rule or its file: ${lines.length === 0 ? "none" : `\n${lines.join("\n")}`}\n` +
+        `RESULT: ${pass ? "PASS" : "FAIL"}`;
     }
     case "clause":
       return `${ruleBlock("RULE", rule)}\n\nCLAUSE c${item.clause!.n}:\n${plain(item.clause!.clause.text)}\n\n${fileBlock(view, file!)}`;

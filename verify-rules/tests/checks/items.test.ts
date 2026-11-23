@@ -76,12 +76,15 @@ test("a piece's state holds its lines and the other rule's whole text", () => {
 });
 
 test("part 1's state is the tie check's own output for the rule and its file", () => {
-  assert.match(stateOf(item("tie.p1:part/dots.py"), built.view, built.report), /tied both ways: yes/);
+  const good = stateOf(item("tie.p1:part/dots.py"), built.view, built.report);
+  assert.match(good, /the file exists: yes\n.*tied both ways.*: yes/);
+  assert.match(good, /^RESULT: PASS/m);
   const broken = memoryRepo({ ...FILES, "part/dots.py": '"""Dots are found!"""\n' });
   const report = tieCheck(broken, THESIS, [py]);
   const p1 = tieItems(broken, report, [py], "").items.find((i) => i.id === "tie.p1:part/dots.py")!;
   const s = stateOf(p1, broken, report);
-  assert.match(s, /tied both ways: no/);
+  assert.match(s, /tied both ways.*: no/);
+  assert.match(s, /^RESULT: FAIL/m);
   assert.match(s, /part\/dots\.py: its heading does not state the bold sentence/);
 });
 
