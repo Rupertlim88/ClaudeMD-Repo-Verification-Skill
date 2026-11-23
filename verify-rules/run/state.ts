@@ -115,10 +115,18 @@ export function utcSeconds(time: Date): string {
   return time.toISOString().replace(/\.\d+Z$/, "Z");
 }
 
-// Writes to <file>.partial, then renames it over the file, so a stop mid-write leaves the old file whole.
+// Writes to <file>.<process id>.partial, flushes it to disk, then renames it over the file, so a stop mid-write
+// leaves the old file whole, and writers in other processes never touch this one's partial file.
 export function writeWhole(file: string, text: string): void {
-  fs.writeFileSync(file + ".partial", text);
-  fs.renameSync(file + ".partial", file);
+  const partial = `${file}.${process.pid}.partial`;
+  const fd = fs.openSync(partial, "w");
+  try {
+    fs.writeFileSync(fd, text);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(partial, file);
 }
 
 export function readState(p: RunPaths): RunState {

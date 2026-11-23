@@ -11,6 +11,7 @@ import {
   saveTable,
   writeWhole,
 } from "../../run/state.ts";
+import { atOnce } from "../helpers/at-once.ts";
 import { sampleState } from "../helpers/state.ts";
 import { git, makeRepo, tmpDir } from "../helpers/tmp.ts";
 
@@ -90,12 +91,33 @@ test("writeWhole puts a new file in place of the old one, never writing into the
   assert.equal(fs.readFileSync(`${f}.before`, "utf8"), "old");
 });
 
+test("writeWhole flushes the new text to disk before it renames the file into place", (t) => {
+  const f = path.join(tmpDir("whole"), "state.json");
+  const order: string[] = [];
+  const { fsyncSync, renameSync } = fs;
+  t.mock.method(fs, "fsyncSync", (fd: number) => { order.push("flush"); fsyncSync(fd); });
+  t.mock.method(fs, "renameSync", (from: string, to: string) => { order.push(`rename to ${path.basename(to)}`); renameSync(from, to); });
+  writeWhole(f, "new");
+  assert.deepEqual(order, ["flush", "rename to state.json"]);
+});
+
+test("writers in four processes at once each put a whole file in place, and leave no partial file", async () => {
+  const dir = tmpDir("race");
+  const f = path.join(dir, "status.md");
+  const ends = await atOnce(["1", "2", "3", "4"].map((writer) => ["whole", f, writer, "100"]));
+  assert.deepEqual(ends, [1, 2, 3, 4].map(() => ({ code: 0, stderr: "" })));
+  const text = fs.readFileSync(f, "utf8");
+  assert.match(text, /^writer [1-4]\n/);
+  assert.equal(text, `${text.split("\n")[0]}\n`.repeat(20000));
+  assert.deepEqual(fs.readdirSync(dir), ["status.md"]);
+});
+
 test("writeWhole leaves no partial file, and a stale partial file never replaces the state", () => {
   const p = newRun();
   const f = path.join(p.root, "note.txt");
   writeWhole(f, "new");
   assert.equal(fs.readFileSync(f, "utf8"), "new");
-  assert.ok(!fs.existsSync(f + ".partial"));
+  assert.deepEqual(fs.readdirSync(p.root).filter((name) => name.endsWith(".partial")), []);
   const saved = sampleState();
   saveState(p, saved);
   fs.writeFileSync(p.state + ".partial", "{broken");
