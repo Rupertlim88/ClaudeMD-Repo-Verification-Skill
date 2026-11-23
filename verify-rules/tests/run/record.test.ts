@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { append, canonicalJson, capture, chainHead, trailers, verifyRecord } from "../../run/record.ts";
-import { createRun, type RunPaths } from "../../run/state.ts";
+import { addAnswer, append, canonicalJson, capture, chainHead, checkedState, trailers, verifyRecord } from "../../run/record.ts";
+import { createRun, readState, updateState, type RunPaths } from "../../run/state.ts";
 import { atOnce } from "../helpers/at-once.ts";
 import { git, makeRepo, tmpDir } from "../helpers/tmp.ts";
 
@@ -207,6 +207,59 @@ test("verifyRecord fails a verdict whose captured file is changed or missing", (
   fs.rmSync(file);
   assert.deepEqual(verifyRecord(p, repo, "main"),
     { ok: false, problem: "line 1: the captured output checkers/c1.json is missing" });
+});
+
+// A run whose state holds item 7.clause:R1#c1, with one captured Jev answer file.
+function runWithItem() {
+  const { p, repo } = newRun();
+  updateState(p, (s) => { s.items["7.clause:R1#c1"] = { status: "in progress", answers: [] }; });
+  fs.writeFileSync(path.join(p.jev, "r1.json"), '{"p":0.97}\n');
+  return { p, repo, item: "7.clause:R1#c1" };
+}
+
+const jevPass = { check: "correct", by: "jev", verdict: "PASS" };
+
+test("addAnswer chains the answer with its captured output, and the state's answer names that entry", () => {
+  const { p, item } = runWithItem();
+  const entry = addAnswer(p, item, jevPass, "jev/r1.json", t0);
+  assert.deepEqual(checkedState(p).items[item].answers, [{ ...jevPass, entry }]);
+  const last = JSON.parse(fs.readFileSync(p.record, "utf8").trimEnd().split("\n").at(-1)!);
+  assert.deepEqual(last, { ...jevPass, item, output: capture(p, "jev/r1.json"), kind: "answer", t: "2026-11-23T05:48:54Z", chain: entry });
+});
+
+test("addAnswer refuses an item the state does not hold, and chains nothing", () => {
+  const { p } = runWithItem();
+  assert.throws(() => addAnswer(p, "7.clause:R9#c9", jevPass, "jev/r1.json", t0), /no item 7\.clause:R9#c9/);
+  assert.equal(fs.readFileSync(p.record, "utf8"), "");
+});
+
+test("checkedState refuses an answer typed into the state that no answer entry of the record holds", () => {
+  const { p, item } = runWithItem();
+  const start = append(p, "start", {}, t0);
+  const other = addAnswer(p, item, { ...jevPass, check: "complete" }, "jev/r1.json", t0);
+  const state = fs.readFileSync(p.state, "utf8");
+  for (const forged of [{ ...jevPass, entry: "f".repeat(64) }, { ...jevPass, entry: start }, { ...jevPass, entry: other }]) {
+    fs.writeFileSync(p.state, state);
+    updateState(p, (s) => { s.items[item].answers.push(forged); });
+    assert.throws(() => checkedState(p), /the state does not match the record: 7\.clause:R1#c1/, forged.entry);
+  }
+});
+
+test("checkedState refuses a state answer edited to say something other than its record entry", () => {
+  const { p, item } = runWithItem();
+  addAnswer(p, item, { ...jevPass, verdict: "FAIL" }, "jev/r1.json", t0);
+  updateState(p, (s) => { s.items[item].answers[0].verdict = "PASS"; });
+  assert.throws(() => checkedState(p), /the state does not match the record/);
+});
+
+test("checkedState refuses a state when the record is broken or an answer's captured output changed", () => {
+  const { p, item } = runWithItem();
+  addAnswer(p, item, jevPass, "jev/r1.json", t0);
+  fs.writeFileSync(path.join(p.jev, "r1.json"), '{"p":0.10}\n');
+  assert.throws(() => checkedState(p), /the record is broken: line 1: the captured output jev\/r1.json was changed/);
+  editRecord(p, (lines) => lines.map((line) => line.replace('"PASS"', '"FAIL"')));
+  assert.throws(() => checkedState(p), /the record is broken: line 1 does not follow/);
+  assert.equal(readState(p).items[item].answers.length, 1);
 });
 
 test("canonicalJson sorts keys at every depth, and keeps the order of lists", () =>

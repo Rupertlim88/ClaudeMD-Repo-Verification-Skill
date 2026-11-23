@@ -6,7 +6,7 @@ export function sampleState(): RunState {
     repo: "/repos/r", scope: "models/lodestar", startCommit: "a".repeat(40), baseline: "b".repeat(40),
     baselineHow: "merge-base with main", branch: "verify-rules/run-1", doerModel: "claude-opus-5-5",
     step: "7", round: 2, stepStartCommit: "c".repeat(40),
-    items: { "7.clause:R1#c1": { status: "passed", answers: [{ check: "correct", by: "jev", verdict: "PASS", ref: "jev/1.json" }] } },
+    items: { "7.clause:R1#c1": { status: "passed", answers: [{ check: "correct", by: "jev", verdict: "PASS", entry: "d".repeat(64) }] } },
     testCommands: [{ name: "all", command: "python -m pytest", exit: 0, outputFile: "evidence/all.txt" }],
     knownFailures: ["tests/test_x.py::test_slow"],
     budgets: { moneyUsd: 5, claudeRuns: 20, questionId: "q1" },

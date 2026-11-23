@@ -6,7 +6,10 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { isOneOf, utcSeconds, withLock, within, writeWhole, type RunPaths, type StepId } from "./state.ts";
+import {
+  isOneOf, readState, updateState, utcSeconds, withLock, within, writeWhole, type Answer, type RunPaths, type RunState,
+  type StepId,
+} from "./state.ts";
 
 const EMPTY_HEAD = "0".repeat(64);
 // The fields append sets on every entry, which a caller's fields may not hold.
@@ -16,6 +19,8 @@ const EVIDENCE_KINDS = ["answer", "verdict"] as const;
 
 // A captured output: a file in the run folder, named from the run folder, with the SHA-256 of its bytes.
 export interface Captured { file: string; sha256: string }
+
+type Entry = { kind: string; chain: string; [field: string]: unknown };
 
 // JSON with the keys of every object sorted, so the same entry always gives the same text.
 export function canonicalJson(v: unknown): string {
@@ -71,18 +76,54 @@ export function append(p: RunPaths, kind: string, fields: Record<string, unknown
   });
 }
 
+// Adds an item's answer: its entry in the record, naming its captured output, then the answer in the state, naming
+// that entry; both while holding the run folder's lock. Returns the entry's chain hash.
+export function addAnswer(p: RunPaths, item: string, { check, by, verdict }: Answer, output: string, now = new Date()): string {
+  return updateState(p, (s) => {
+    const target = s.items[item];
+    if (target === undefined) throw new Error(`there is no item ${item} in the state`);
+    const entry = append(p, "answer", { item, check, by, verdict, output: capture(p, output) }, now);
+    target.answers.push({ check, by, verdict, entry });
+    return entry;
+  });
+}
+
+// The state as the gate reads it: every answer of every item must name an answer entry of the checked record that
+// says the same. A state that does not match, or a broken record, is refused.
+export function checkedState(p: RunPaths): RunState {
+  const checked = verifyEntries(p);
+  if ("problem" in checked) throw new Error(`the record is broken: ${checked.problem}`);
+  const answers = new Map(checked.entries.filter((e) => e.kind === "answer").map((e) => [e.chain, e]));
+  const s = readState(p);
+  for (const [item, { answers: given }] of Object.entries(s.items)) {
+    for (const a of given) {
+      const e = answers.get(a.entry);
+      if (e?.item !== item || e.check !== a.check || e.by !== a.by || e.verdict !== a.verdict) {
+        throw new Error(`the state does not match the record: ${item} has an answer by ${a.by} on ${a.check} that no record entry holds`);
+      }
+    }
+  }
+  return s;
+}
+
 export type RecordCheck = { ok: true; head: string; entries: number } | { ok: false; problem: string };
 
 // The record's whole check: first the chain, then every captured output, then the checkpoint trailers on the branch.
 export function verifyRecord(p: RunPaths, repoDir: string, branch: string): RecordCheck {
-  const chain = verifyChain(p);
-  if ("problem" in chain) return { ok: false, problem: chain.problem };
-  const problem = verifyEvidence(p, chain.entries) ?? verifyTrailers(p, chain.entries, repoDir, branch);
+  const checked = verifyEntries(p);
+  if ("problem" in checked) return { ok: false, problem: checked.problem };
+  const problem = verifyTrailers(p, checked.entries, repoDir, branch);
   if (problem !== null) return { ok: false, problem };
-  return { ok: true, head: chain.entries.at(-1)?.chain ?? EMPTY_HEAD, entries: chain.entries.length };
+  return { ok: true, head: checked.entries.at(-1)?.chain ?? EMPTY_HEAD, entries: checked.entries.length };
 }
 
-type Entry = { kind: string; chain: string; [field: string]: unknown };
+// Every entry, oldest first, if the chain holds and every captured output still has its hash; else the first problem.
+function verifyEntries(p: RunPaths): { entries: Entry[] } | { problem: string } {
+  const chain = verifyChain(p);
+  if ("problem" in chain) return chain;
+  const problem = verifyEvidence(p, chain.entries);
+  return problem === null ? chain : { problem };
+}
 
 // Every entry, oldest first, if each line is a JSON object whose hash follows from the line before it; else the
 // first line that is not.

@@ -13,9 +13,13 @@ export interface RunPaths {
 export const ITEM_STATES = ["not started", "in progress", "done", "passed", "failed", "reopened"] as const;
 export type ItemStatus = (typeof ITEM_STATES)[number];
 
+// One checker's answer on one of an item's checks.
+export interface Answer { check: string; by: string; verdict: string }
+
+// An item's answers each name the record entry that holds them, by its chain hash, so the gate can check them.
 export interface ItemState {
   status: ItemStatus;
-  answers: { check: string; by: string; verdict: string; ref: string }[];
+  answers: (Answer & { entry: string })[];
 }
 
 export interface Finding {
