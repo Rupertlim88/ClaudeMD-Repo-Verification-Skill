@@ -11,7 +11,7 @@ import { updateState, withLock, writeWhole, type RunPaths } from "../run/state.t
 
 export interface Template {
   question: string; role: "may only fail" | "decides with the Claude checker" | "weak signal";
-  pass: number | null; fail: number; state: string; source: string;
+  pass: number | null; fail: number; state: string; holds: string; source: string;
 }
 
 export const QUESTIONS: { model: string; provider: string; usdPerInputToken: number; templates: Record<string, Template> } =

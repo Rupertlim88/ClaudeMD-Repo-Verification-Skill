@@ -23,7 +23,7 @@ const short = (text: string) => createHash("sha256").update(text).digest("hex").
 // A clause as a sentence: without its list marker or bold markers, on one line.
 const plain = (text: string) => text.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
 
-function rulesOf(view: RepoView): Rule[] {
+export function rulesOf(view: RepoView): Rule[] {
   const claudes = view.files.filter((file) => path.posix.basename(file) === "CLAUDE.md");
   return [...readAll(new Map(claudes.map((claude) => [claude, view.read(claude)]))).values()].flatMap((r) => r.rules);
 }

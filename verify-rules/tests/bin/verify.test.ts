@@ -1,0 +1,136 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { test } from "node:test";
+import { entries } from "../../run/record.ts";
+import { openRun, readState } from "../../run/state.ts";
+import { GLOBAL, OPENING } from "../helpers/repo-view.ts";
+import { makeRepo, tmpDir } from "../helpers/tmp.ts";
+
+const VERIFY = path.resolve(import.meta.dirname, "../../bin/verify.ts");
+
+function verify(args: string[], input = "") {
+  const r = spawnSync("node", [VERIFY, ...args], { encoding: "utf8", input, env: { ...process.env, AI_GATEWAY_API_KEY: "" } });
+  return { out: r.stdout, err: r.stderr, code: r.status };
+}
+
+const TIED = {
+  "CLAUDE.md": GLOBAL,
+  "part/CLAUDE.md": OPENING + "- **Dots are found.** It finds dots. It never counts a dot twice.\n  *File:* `dots.py`\n" +
+    "- **Outlines are drawn.** It draws outlines.\n  *File:* `outline.py`\n",
+  "part/dots.py": '"""Dots are found."""\n\nLIMIT = 3\n\n\ndef dots(xs):\n    return xs[:LIMIT]\n',
+  "part/outline.py": '"""Outlines are drawn."""\n\n\ndef outline(x):\n    return x\n',
+};
+
+function start(files: Record<string, string>) {
+  const repo = makeRepo(files);
+  const r = verify(["start", repo, "--doer", "claude-opus-5-5", "--base", tmpDir("runs")]);
+  const run = /^Run folder: (.+)$/m.exec(r.out)?.[1];
+  return { repo, run: run!, ...r };
+}
+
+test("start makes the run folder outside the repo, finds the situation, and says what to do next", () => {
+  const r = start(TIED);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(!r.run.startsWith(fs.realpathSync(r.repo)));
+  const s = readState(openRun(r.run));
+  assert.deepEqual([s.situation?.guess, s.doerModel, s.step], ["D", "claude-opus-5-5", "0"]);
+  assert.match(r.out, /Situation: D/);
+  assert.match(r.out, /verify\.ts budget/);
+  assert.match(fs.readFileSync(path.join(r.run, "status.md"), "utf8"), /step 0, round 1/);
+});
+
+test("start tells an empty repo, code with no CLAUDE.md, and a partly tied repo apart", () => {
+  assert.match(start({ ".gitignore": "x\n" }).out, /Situation: A/);
+  assert.match(start({ "main.py": "x = 1\n" }).out, /Situation: B/);
+  assert.match(start({ ...TIED, "part/extra.py": "x = 1\n" }).out, /Situation: C/);
+});
+
+test("start needs the doer's model id", () => {
+  const r = verify(["start", makeRepo(TIED), "--base", tmpDir("runs")]);
+  assert.notEqual(r.code, 0);
+  assert.match(r.err, /--doer/);
+});
+
+test("ties lists what is broken and not yet tied, and fails only on a broken tie", () => {
+  const good = verify(["ties", makeRepo(TIED)]);
+  assert.equal(good.code, 0, good.err);
+  assert.match(good.out, /0 broken ties; 0 rules needing a file, 0 rules not yet marked, 0 files not yet tied/);
+  const untied = verify(["ties", makeRepo({ ...TIED, "part/extra.py": "x = 1\n" })]);
+  assert.equal(untied.code, 0);
+  assert.match(untied.out, /^file not yet tied {2}part\/extra\.py$/m);
+  const broken = verify(["ties", makeRepo({ ...TIED, "part/dots.py": '"""Dots!"""\n' })]);
+  assert.equal(broken.code, 1);
+  assert.match(broken.out, /^BROKEN {2}part\/dots\.py: its heading does not state/m);
+});
+
+test("with --run, an output is captured in the run folder and recorded", () => {
+  const r = start(TIED);
+  const out = verify(["ties", r.repo, "--run", r.run]);
+  const captured = /captured: (evidence\/\S+)/.exec(out.out)![1];
+  assert.match(fs.readFileSync(path.join(r.run, captured), "utf8"), /0 broken ties/);
+  assert.equal(entries(openRun(r.run)).at(-1)!.kind, "output");
+});
+
+test("rules summarises the rule reader's result, and --json gives it whole", () => {
+  const repo = makeRepo(TIED);
+  assert.match(verify(["rules", repo]).out, /^part\/CLAUDE\.md: 2 rules \(2 named, 0 unnamed\), 2 file lines/m);
+  const json = JSON.parse(verify(["rules", repo, "--json"]).out);
+  assert.equal(json["part/CLAUDE.md"].rules[1].bold, "Outlines are drawn.");
+});
+
+test("clauses prints each rule's clause table and whether it passes its floor; --rule picks one rule", () => {
+  const out = verify(["clauses", makeRepo(TIED), "--rule", "Dots are found."]).out;
+  assert.match(out, /^part\/CLAUDE\.md: "Dots are found\." 3 clauses, floor 3: passes$/m);
+  assert.match(out, /^ {2}c3 \[\d+-\d+\] "It never counts a dot twice\."$/m);
+  assert.doesNotMatch(out, /Outlines are drawn/);
+});
+
+test("items prints every item's fixed question and the jev command that asks it", () => {
+  const out = verify(["items", makeRepo(TIED), "--folder", "part"]).out;
+  assert.match(out, /Q: Does `part\/dots\.py` carry out this clause of its rule: 'It never counts a dot twice\.'\?/);
+  assert.match(out, /verify\.ts jev --run "\$RUN" --item 'tie\.p2:part\/dots\.py#c3' --template tie-part2-clause --rule 'Dots are found\.' --file 'part\/dots\.py'/);
+  assert.match(out, /part 4/);
+});
+
+test("jev refuses an item the item list does not hold, a mismatched rule, and evidence verify did not capture", () => {
+  const r = start(TIED);
+  const ask = (...args: string[]) => verify(["jev", "--run", r.run, ...args]);
+  assert.match(ask("--item", "tie.p9:x", "--template", "tie-part1").err, /no item tie\.p9:x/);
+  assert.match(ask("--item", "tie.p3:part/dots.py", "--template", "tie-part3-file", "--rule", "Outlines are drawn.", "--file", "part/dots.py").err,
+    /rule/);
+  fs.writeFileSync(path.join(r.run, "evidence", "typed.txt"), "all good");
+  assert.match(ask("--item", "0.x", "--template", "correct", "--step", "0", "--evidence", "evidence/typed.txt").err, /not captured/);
+  assert.equal(readState(openRun(r.run)).spend.jevCalls, 0);
+});
+
+test("the question log keeps the answer exactly as typed, and budgets need an answered question", () => {
+  const r = start(TIED);
+  const asked = verify(["log-question", "--run", r.run, "--kind", "c", "--topic", "budgets"], "What may this run spend?\n");
+  assert.match(asked.out, /logged q1/);
+  assert.match(verify(["status", "--run", r.run]).out, /waiting on you: question q1 \(budgets\)/);
+  assert.match(verify(["budget", "--run", r.run, "--question", "q1", "--usd", "1", "--claude-runs", "5"]).err, /no answer/);
+  verify(["log-answer", "--run", r.run, "--id", "q1"], "$1, and 5 Claude runs  \n");
+  const q = JSON.parse(fs.readFileSync(path.join(r.run, "questions.jsonl"), "utf8").trim().split("\n").at(-1)!);
+  assert.equal(q.answer, "$1, and 5 Claude runs  ");
+  assert.equal(verify(["budget", "--run", r.run, "--question", "q1", "--usd", "1", "--claude-runs", "5"]).code, 0);
+  assert.deepEqual(readState(openRun(r.run)).budgets, { moneyUsd: 1, claudeRuns: 5, questionId: "q1" });
+});
+
+test("step sets the step the status file follows, and a step again starts its next round", () => {
+  const r = start(TIED);
+  verify(["step", "--run", r.run, "--step", "tie"]);
+  verify(["step", "--run", r.run, "--step", "tie"]);
+  assert.match(verify(["status", "--run", r.run]).out, /step tie, round 2/);
+  assert.notEqual(verify(["step", "--run", r.run, "--step", "5"]).code, 0);
+});
+
+test("checker-prompt prints the filled prompt, and checker-answer records the checker's answer", () => {
+  const r = start(TIED);
+  assert.match(verify(["checker-prompt", "--run", r.run, "--step", "tie"]).out, new RegExp(`checker-answer --run ${r.run} --step tie`));
+  const saved = verify(["checker-answer", "--run", r.run, "--step", "tie", "--model", "claude-sonnet-5-5"],
+    "PASS — tie.p1:part/dots.py — ok\nCORRECT PASS\nSAME PASS\nCOMPLETE PASS\nSTEP PASS\n");
+  assert.match(saved.out, /step tie: PASS/);
+  assert.equal(entries(openRun(r.run)).at(-1)!.kind, "checker");
+});

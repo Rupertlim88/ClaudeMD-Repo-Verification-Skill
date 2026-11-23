@@ -3,57 +3,97 @@
   "model": "typesafe-ai/jev-1.14.0",
   "modelNote": "a pinned version, never the alias typesafe-ai/jev (tools: Jev client 7); 1.14.0 is provisional until calibration picks the version",
   "provider": "typesafe-ai",
-  "usdPerInputToken": 4.2e-8,
+  "usdPerInputToken": 4.2e-08,
   "priceSource": "the AI Gateway's model list, read 2026-11-23: input $0.000000042 per token, output $0",
   "templates": {
     "tie-part1": {
       "question": "Does this output show a pass?",
-      "role": "may only fail", "pass": null, "fail": 0.5, "state": "tie-output",
+      "role": "may only fail",
+      "pass": null,
+      "fail": 0.5,
+      "state": "tie-output",
+      "holds": "the two-way tie check's output for this rule and its file, run by script",
       "source": "tools: tie-stage check, part 1 (Jev is asked on the script's output and may only fail; fail line: every other question type)"
     },
     "tie-part2-clause": {
       "question": "Does `{file}` carry out this clause of its rule: '{clause}'?",
-      "role": "may only fail", "pass": null, "fail": 0.35, "state": "clause",
+      "role": "may only fail",
+      "pass": null,
+      "fail": 0.35,
+      "state": "clause",
+      "holds": "the clause, the rule's whole text and the whole file; never its tests or any mutation output",
       "source": "tools: tie-stage check, part 2, per clause; thresholds: clause carried out"
     },
     "tie-part2-list": {
       "question": "Does this clause list cover every requirement of the rule's text?",
-      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "clause-list",
+      "role": "decides with the Claude checker",
+      "pass": 0.8,
+      "fail": 0.5,
+      "state": "clause-list",
+      "holds": "the rule's whole text, and the script's clause table with each clause's span and the floor check",
       "source": "tools: tie-stage check, part 2, per rule; thresholds: clause list covers the rule's text"
     },
     "tie-part3-file": {
       "question": "Does everything in `{file}` serve its rule '{bold}', with no part doing something its rule does not ask for?",
-      "role": "weak signal", "pass": 0.73, "fail": 0.19, "state": "file-serves",
+      "role": "weak signal",
+      "pass": 0.73,
+      "fail": 0.19,
+      "state": "file-serves",
+      "holds": "the whole file, its rule's whole text, and the general rules over its folder",
       "source": "tools: tie-stage check, part 3, per file; thresholds: the file serves only its rule"
     },
     "tie-part4-piece": {
       "question": "Is this piece of code free of the job of the rule '{bold}'?",
-      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "piece-rule",
+      "role": "decides with the Claude checker",
+      "pass": 0.8,
+      "fail": 0.5,
+      "state": "piece-rule",
+      "holds": "the piece's lines, what it writes, the file's own rule, and the other rule's whole text",
       "source": "tools: tie-stage check, part 4, per piece and candidate rule, in the user's words 'Is this file free of other rules jobs?'; reworded so that yes means right, so not yet calibrated: every other question type"
     },
     "correct": {
       "question": "Was it done correctly, based on these instructions?",
-      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "step-check",
+      "role": "decides with the Claude checker",
+      "pass": 0.8,
+      "fail": 0.5,
+      "state": "step-check",
+      "holds": "the step's instructions from SKILL.md, the rule and the file it is about (if any), and the outputs verify captured in the run folder",
       "source": "SKILL.md: the core, idea 2, correct; thresholds: every other question type"
     },
     "same-code": {
       "question": "Does the code pass all of the same checks it did before?",
-      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "step-check",
+      "role": "decides with the Claude checker",
+      "pass": 0.8,
+      "fail": 0.5,
+      "state": "step-check",
+      "holds": "the step's instructions from SKILL.md, the rule and the file it is about (if any), and the outputs verify captured in the run folder",
       "source": "SKILL.md: the core, idea 2, same, for code; thresholds: every other question type"
     },
     "same-meaning": {
       "question": "Does the CLAUDE.md have the exact same meaning as before?",
-      "role": "decides with the Claude checker", "pass": 0.65, "fail": 0.4, "state": "step-check",
+      "role": "decides with the Claude checker",
+      "pass": 0.65,
+      "fail": 0.4,
+      "state": "step-check",
+      "holds": "the step's instructions from SKILL.md, the rule and the file it is about (if any), and the outputs verify captured in the run folder",
       "source": "SKILL.md: the core, idea 2, same, for a CLAUDE.md; thresholds: same meaning after a move"
     },
     "complete": {
       "question": "Was this completed completely, and not only in part?",
-      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "step-check",
+      "role": "decides with the Claude checker",
+      "pass": 0.8,
+      "fail": 0.5,
+      "state": "step-check",
+      "holds": "the step's instructions from SKILL.md, the rule and the file it is about (if any), and the outputs verify captured in the run folder",
       "source": "SKILL.md: the core, idea 2, complete; thresholds: every other question type"
     },
     "whole-process": {
       "question": "Have we implemented the whole process correctly?",
-      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "step-check",
+      "role": "decides with the Claude checker",
+      "pass": 0.8,
+      "fail": 0.5,
+      "state": "step-check",
+      "holds": "the step's instructions from SKILL.md, the rule and the file it is about (if any), and the outputs verify captured in the run folder",
       "source": "SKILL.md: the core, idea 3; thresholds: every other question type"
     }
   }
