@@ -1,0 +1,60 @@
+{
+  "about": "The fixed Jev questions: the user's four-part tie check (docs/tools.md: tie-stage check) and the three checks after every item and step (SKILL.md: the core, idea 2). Each is worded so that yes means right. p is Jev's probability of yes. A 'may only fail' question can never pass: a p at or above its fail line is unsure, and the script and the Claude checker decide. Thresholds are provisional (docs/tools.md: thresholds and calibration). The doer never words a Jev question.",
+  "model": "typesafe-ai/jev-1.14.0",
+  "modelNote": "a pinned version, never the alias typesafe-ai/jev (tools: Jev client 7); 1.14.0 is provisional until calibration picks the version",
+  "provider": "typesafe-ai",
+  "usdPerInputToken": 4.2e-8,
+  "priceSource": "the AI Gateway's model list, read 2026-11-23: input $0.000000042 per token, output $0",
+  "templates": {
+    "tie-part1": {
+      "question": "Does this output show a pass?",
+      "role": "may only fail", "pass": null, "fail": 0.5, "state": "tie-output",
+      "source": "tools: tie-stage check, part 1 (Jev is asked on the script's output and may only fail; fail line: every other question type)"
+    },
+    "tie-part2-clause": {
+      "question": "Does `{file}` carry out this clause of its rule: '{clause}'?",
+      "role": "may only fail", "pass": null, "fail": 0.35, "state": "clause",
+      "source": "tools: tie-stage check, part 2, per clause; thresholds: clause carried out"
+    },
+    "tie-part2-list": {
+      "question": "Does this clause list cover every requirement of the rule's text?",
+      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "clause-list",
+      "source": "tools: tie-stage check, part 2, per rule; thresholds: clause list covers the rule's text"
+    },
+    "tie-part3-file": {
+      "question": "Does everything in `{file}` serve its rule '{bold}', with no part doing something its rule does not ask for?",
+      "role": "weak signal", "pass": 0.73, "fail": 0.19, "state": "file-serves",
+      "source": "tools: tie-stage check, part 3, per file; thresholds: the file serves only its rule"
+    },
+    "tie-part4-piece": {
+      "question": "Is this piece of code free of the job of the rule '{bold}'?",
+      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "piece-rule",
+      "source": "tools: tie-stage check, part 4, per piece and candidate rule, in the user's words 'Is this file free of other rules jobs?'; reworded so that yes means right, so not yet calibrated: every other question type"
+    },
+    "correct": {
+      "question": "Was it done correctly, based on these instructions?",
+      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "step-check",
+      "source": "SKILL.md: the core, idea 2, correct; thresholds: every other question type"
+    },
+    "same-code": {
+      "question": "Does the code pass all of the same checks it did before?",
+      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "step-check",
+      "source": "SKILL.md: the core, idea 2, same, for code; thresholds: every other question type"
+    },
+    "same-meaning": {
+      "question": "Does the CLAUDE.md have the exact same meaning as before?",
+      "role": "decides with the Claude checker", "pass": 0.65, "fail": 0.4, "state": "step-check",
+      "source": "SKILL.md: the core, idea 2, same, for a CLAUDE.md; thresholds: same meaning after a move"
+    },
+    "complete": {
+      "question": "Was this completed completely, and not only in part?",
+      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "step-check",
+      "source": "SKILL.md: the core, idea 2, complete; thresholds: every other question type"
+    },
+    "whole-process": {
+      "question": "Have we implemented the whole process correctly?",
+      "role": "decides with the Claude checker", "pass": 0.8, "fail": 0.5, "state": "step-check",
+      "source": "SKILL.md: the core, idea 3; thresholds: every other question type"
+    }
+  }
+}
