@@ -1,7 +1,7 @@
 // The one command-line entry of /verify-rules: `node <skill>/bin/verify.ts <command> …`. Each command prints what the
 // doer needs and exits non-zero when what it checks fails. With --run, the output of rules, ties, clauses and items is
 // also captured in the run folder and recorded, so that a Jev state or a checker can cite it.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +26,7 @@ const USAGE = `usage: node ${SELF} <command> …
   ties <repo> [--json] [--run <folder>]               the two-way tie check; exits 1 on a broken tie
   clauses <repo> [--rule "<bold sentence>"] [--json] [--run <folder>]   each rule's clauses and floor
   items <repo> [--folder <path>] [--json] [--run <folder>]   the four-part tie check's items and their jev commands
+  capture --run <folder> --name <word> -- <command> …   run a command (such as the tests) in the repo, and capture it
   jev --run <folder> --item <id> --template <name> [--rule "<bold>"] [--file <path>] [--step <id>] [--evidence <file>]…
   status --run <folder>
   step --run <folder> --step <${STEP_IDS.join("|")}>
@@ -264,8 +265,43 @@ async function start(repoArg: string, a: Args): Promise<Output> {
   return { text, code: 0 };
 }
 
+// The next evidence file of a name, from the run folder: evidence/<name>-<n>.txt.
+function nextEvidence(p: RunPaths, name: string): string {
+  if (!/^[\w-]+$/.test(name)) throw new Usage(`--name must be one word, not "${name}"`);
+  return path.join("evidence", `${name}-${fs.readdirSync(p.evidence).filter((f) => f.startsWith(`${name}-`)).length + 1}.txt`);
+}
+
+function record(p: RunPaths, file: string, command: string, exit: number): string {
+  append(p, "output", { command, exit, output: capture(p, file) });
+  refresh(p, `captured ${file}`);
+  return `captured: ${file}`;
+}
+
+// Runs a command in the run's repo, printing its output as it comes and writing it to the evidence file as it goes;
+// then records the file with the command's exit code, which it returns.
+async function captureCommand(p: RunPaths, name: string, command: string[]): Promise<number> {
+  if (command.length === 0) throw new Usage("capture needs the command after --");
+  const file = nextEvidence(p, name);
+  const fd = fs.openSync(path.join(p.root, file), "w");
+  const write = (chunk: string) => { process.stdout.write(chunk); fs.writeSync(fd, chunk); };
+  write(`$ ${command.map(shell).join(" ")}\n`);
+  const exit = await new Promise<number>((resolve) => {
+    const child = spawn(command[0], command.slice(1), { cwd: readState(p).repo });
+    child.stdout.setEncoding("utf8").on("data", write);
+    child.stderr.setEncoding("utf8").on("data", write);
+    child.on("error", (e) => { write(`${e.message}\n`); resolve(127); });
+    child.on("close", (code) => resolve(code ?? 1));
+  });
+  write(`exit ${exit}\n`);
+  fs.closeSync(fd);
+  console.log(record(p, file, command.join(" "), exit));
+  return exit;
+}
+
 async function main(argv: string[]): Promise<number> {
-  const [command, ...rest] = argv;
+  const [command, ...all] = argv;
+  const dash = all.indexOf("--");
+  const rest = dash === -1 ? all : all.slice(0, dash);
   const a = parse(rest);
   const repo = () => {
     if (a.positional[0] === undefined) throw new Usage(`${command} needs <repo>`);
@@ -284,6 +320,7 @@ async function main(argv: string[]): Promise<number> {
     case "clauses": out = await clausesCommand(repo(), a); break;
     case "items": out = await itemsCommand(repo(), a); break;
     case "jev": out = await jevCommand(a); break;
+    case "capture": return captureCommand(run(), need(a, "name"), dash === -1 ? [] : all.slice(dash + 1));
     case "status": out = { text: fs.readFileSync(run().status, "utf8").trimEnd(), code: 0 }; break;
     case "step": {
       const p = run();
@@ -351,12 +388,9 @@ async function main(argv: string[]): Promise<number> {
   const runFolder = one(a, "run");
   if (runFolder !== undefined && ["rules", "ties", "clauses", "items"].includes(command)) {
     const p = openRun(runFolder);
-    const n = fs.readdirSync(p.evidence).filter((f) => f.startsWith(`${command}-`)).length + 1;
-    const file = path.join("evidence", `${command}-${n}.txt`);
+    const file = nextEvidence(p, command);
     fs.writeFileSync(path.join(p.root, file), out.text + "\n");
-    append(p, "output", { command: [command, ...rest].join(" "), exit: out.code, output: capture(p, file) });
-    refresh(p, `captured the output of ${command}`);
-    out.text += `\ncaptured: ${file}`;
+    out.text += `\n${record(p, file, [command, ...rest].join(" "), out.code)}`;
   }
   console.log(out.text);
   return out.code;

@@ -6,8 +6,9 @@ saved through verify as the last section says.
 
 ## What you get
 
-- The skill's instructions: `{{SKILL}}/SKILL.md` (read "The core", "How a run goes", and step {{STEP}}),
-  `{{SKILL}}/branches/words.md`, and every branch file that step {{STEP}} names. For the tie check, read
+- The skill's instructions: `{{SKILL}}/SKILL.md` (read "The core", "How a run goes", "How to run this version", and
+  step {{STEP}}; the run's step "tie" is SKILL.md's step 12, the tie-stage check), `{{SKILL}}/branches/words.md`, and
+  every branch file that step names. For the tie check, read
   the four parts in `{{SKILL}}/checks/questions.json` and run `node {{SKILL}}/bin/verify.ts items {{REPO}}`.
 - The run folder, `{{RUN}}`: `status.md`, `state.json`, the record `record.jsonl` (each entry chained to the one
   before by SHA-256), the captured outputs in `evidence/`, and Jev's raw answers in `jev/` (each holds its question,

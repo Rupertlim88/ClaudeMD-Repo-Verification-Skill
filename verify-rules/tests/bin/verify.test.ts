@@ -146,3 +146,14 @@ test("checker-prompt prints the filled prompt, and checker-answer records the ch
   assert.match(saved.out, /step tie: PASS/);
   assert.equal(entries(openRun(r.run)).at(-1)!.kind, "checker");
 });
+
+test("capture runs a command in the run's repo, captures its output and exit, and the output can then be evidence", () => {
+  const r = start(TIED);
+  const out = verify(["capture", "--run", r.run, "--name", "tests", "--", "python3", "-c", "import os; print(os.listdir('part'))"]);
+  assert.equal(out.code, 0, out.err);
+  const file = /captured: (evidence\/tests-1\.txt)/.exec(out.out)![1];
+  assert.match(fs.readFileSync(path.join(r.run, file), "utf8"), /dots\.py/);
+  const e = entries(openRun(r.run)).at(-1)!;
+  assert.deepEqual([e.kind, e.exit], ["output", 0]);
+  assert.equal(verify(["capture", "--run", r.run, "--name", "fails", "--", "python3", "-c", "raise SystemExit(3)"]).code, 3);
+});
