@@ -1,18 +1,17 @@
 // The question log: every message that asks the user something, written the moment it is asked, and the user's
 // answer word for word, with its transcript message id. Kept as JSON lines, rewritten whole on every change.
 import fs from "node:fs";
-import { utcSeconds, writeWhole, type RunPaths } from "./state.ts";
+import { isOneOf, utcSeconds, writeWhole, type RunPaths } from "./state.ts";
 
 // (a) the numbered lists; (b) a conceptual question outside them; (c) something only the user can do or tell.
-export type MessageKind = "a" | "b" | "c";
+export const MESSAGE_KINDS = ["a", "b", "c"] as const;
+export type MessageKind = (typeof MESSAGE_KINDS)[number];
 
 export interface LoggedQuestion {
   id: string; kind: MessageKind; topic: string; text: string; recommendation: string | null;
   askedAt: string; answer: string | null; answerMessageId: string | null; answeredAt: string | null;
   idNote: string | null; report: string | null;
 }
-
-const KINDS: readonly string[] = ["a", "b", "c"];
 
 export function questions(p: RunPaths): LoggedQuestion[] {
   return fs.readFileSync(p.questions, "utf8").split("\n").filter((line) => line !== "").map((line) => JSON.parse(line));
@@ -24,7 +23,7 @@ function save(p: RunPaths, all: LoggedQuestion[]): void {
 
 export function logQuestion(p: RunPaths, q: { kind: MessageKind; topic: string; text: string; recommendation: string | null },
   now = new Date()): LoggedQuestion {
-  if (!KINDS.includes(q.kind)) throw new Error(`a message to the user must be of kind a, b or c, not "${q.kind}"`);
+  if (!isOneOf(MESSAGE_KINDS, q.kind)) throw new Error(`a message to the user must be of kind a, b or c, not "${q.kind}"`);
   const all = questions(p);
   const logged: LoggedQuestion = {
     id: `q${all.length + 1}`, ...q, askedAt: utcSeconds(now),

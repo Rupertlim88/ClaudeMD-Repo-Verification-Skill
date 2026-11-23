@@ -10,8 +10,11 @@ export interface RunPaths {
   tables: string; jev: string; checkers: string; packs: string; evidence: string; worktree: string;
 }
 
+export const ITEM_STATES = ["not started", "in progress", "done", "passed", "failed", "reopened"] as const;
+export type ItemStatus = (typeof ITEM_STATES)[number];
+
 export interface ItemState {
-  status: "not started" | "in progress" | "done" | "passed" | "failed" | "reopened";
+  status: ItemStatus;
   answers: { check: string; by: string; verdict: string; ref: string }[];
 }
 
@@ -40,12 +43,18 @@ export interface RunState {
 
 export interface RunView { paths: RunPaths; state: RunState; copyRoot: string; table<T>(name: string): T | null }
 
-export type ReasonCode = "user-unanswered" | "user-deferred" | "needs-user-only-fact" | "budget-refused" | "other-owner"
-  | "continued-by-user" | "doer-deferred" | "later-version";
+export const REASON_CODES = ["user-unanswered", "user-deferred", "needs-user-only-fact", "budget-refused", "other-owner",
+  "continued-by-user", "doer-deferred", "later-version"] as const;
+export type ReasonCode = (typeof REASON_CODES)[number];
 
 export interface OpenItem { item: string; code: ReasonCode; evidence: string; needsPutOffQuestion: boolean }
 
 export interface DeclinedItem { item: string; line: string; userWords: string; step: StepId; date: string }
+
+// Whether a value is one of a closed list's members, so that its type narrows to the list's.
+export function isOneOf<T extends string>(list: readonly T[], value: unknown): value is T {
+  return (list as readonly unknown[]).includes(value);
+}
 
 function pathsOf(root: string): RunPaths {
   const at = (name: string) => path.join(root, name);

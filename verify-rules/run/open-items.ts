@@ -2,7 +2,7 @@
 // otherwise it is refused, and the item's step fails. Declined items also live on as commit trailers.
 import { execFileSync } from "node:child_process";
 import type { LoggedQuestion } from "./question-log.ts";
-import type { DeclinedItem, OpenItem, ReasonCode } from "./state.ts";
+import { isOneOf, REASON_CODES, type DeclinedItem, type OpenItem, type ReasonCode } from "./state.ts";
 
 export class Refused extends Error {}
 
@@ -51,6 +51,7 @@ function evidenceFor(item: string, code: ReasonCode, ctx: PutOffContext): string
 }
 
 export function setOpen(item: string, code: ReasonCode, ctx: PutOffContext): OpenItem {
+  if (!isOneOf(REASON_CODES, code)) throw new Refused(`${item} cannot be put off: "${code}" is not a reason code`);
   return { item, code, evidence: evidenceFor(item, code, ctx), needsPutOffQuestion: code === "doer-deferred" };
 }
 

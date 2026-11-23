@@ -1,9 +1,7 @@
 // The status file the user can read at any time: the step, what is being done, the items passed, the spend
 // against each budget, the open items and what waits on the user; then the current step's items and the events.
 import { WAITING_ON_USER } from "./open-items.ts";
-import { utcSeconds, writeWhole, type ItemState, type RunPaths, type RunState } from "./state.ts";
-
-const ITEM_STATES: readonly string[] = ["not started", "in progress", "done", "passed", "failed", "reopened"];
+import { isOneOf, ITEM_STATES, utcSeconds, writeWhole, type ItemState, type RunPaths, type RunState } from "./state.ts";
 
 const usd = (amount: number, decimals: number) => `$${amount.toFixed(decimals)}`;
 
@@ -22,7 +20,7 @@ function openByCode(s: RunState): string {
 export function statusLines(s: RunState, now: Date, doing: string, unpaid: { checks: number; usd: number },
   events: string[]): string[] {
   for (const [id, item] of Object.entries(s.items)) {
-    if (!ITEM_STATES.includes(item.status)) throw new Error(`${id} has an item state that is not allowed: ${item.status}`);
+    if (!isOneOf(ITEM_STATES, item.status)) throw new Error(`${id} has an item state that is not allowed: ${item.status}`);
   }
   // Item ids start with their step: "7.clause:R12#c3@models/lodestar".
   const stepItems: [string, ItemState][] =

@@ -69,6 +69,12 @@ test("later-version needs the check to be missing from the version's shipped che
     "the check tie.p4.duplicates is not in this version");
 });
 
+test("a code outside the fixed list is refused", () => {
+  for (const code of ["whatever", "user-declined"]) {
+    assert.throws(() => setOpen("7.c1", code as ReasonCode, ctx({})), Refused, code);
+  }
+});
+
 test("doer-deferred needs no evidence, and is marked for the put-off question", () =>
   assert.equal(setOpen("8.f2", "doer-deferred", ctx({})).needsPutOffQuestion, true));
 
