@@ -83,7 +83,7 @@ function oneName(name: string, what: string): string {
   return name;
 }
 
-// Whether a path is the folder itself or inside it. Both paths are absolute.
+// Whether a path is the folder itself or inside it, once both are resolved.
 export function within(folder: string, file: string): boolean {
   return (path.resolve(file) + path.sep).startsWith(path.resolve(folder) + path.sep);
 }
