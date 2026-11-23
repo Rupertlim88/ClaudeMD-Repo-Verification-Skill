@@ -12,7 +12,7 @@ import {
   writeWhole,
 } from "../../run/state.ts";
 import { sampleState } from "../helpers/state.ts";
-import { makeRepo, tmpDir } from "../helpers/tmp.ts";
+import { git, makeRepo, tmpDir } from "../helpers/tmp.ts";
 
 function newRun() {
   return createRun("r", new Date("2026-11-23T05:48:54Z"), tmpDir("runs"), makeRepo({ "a.py": "x = 1\n" }));
@@ -56,6 +56,16 @@ test("createRun refuses a run folder inside the repo, and makes nothing there", 
   const repo = makeRepo({ "a.py": "x\n" });
   assert.throws(() => createRun("r", new Date(), path.join(repo, "runs"), repo), /outside the repo/);
   assert.ok(!fs.existsSync(path.join(repo, "runs")));
+});
+
+test("createRun refuses a repo name that is not one folder name, so the run folder cannot land in the repo", () => {
+  const repo = makeRepo({ "a.py": "x\n" });
+  const base = tmpDir("runs");
+  for (const name of [`../${path.basename(repo)}/x`, "a\\b", ""]) {
+    assert.throws(() => createRun(name, new Date(), base, repo), /one folder or file name/, name);
+  }
+  assert.deepEqual(fs.readdirSync(base), []);
+  assert.equal(git(repo, "status", "--porcelain"), "");
 });
 
 test("createRun compares real paths, so a link into the repo is refused", () => {
@@ -105,4 +115,14 @@ test("a table is saved whole under tables/ and read back; a missing table reads 
   assert.ok(fs.existsSync(path.join(p.tables, "clauses-R1.json")));
   assert.deepEqual(readTable(p, "clauses-R1"), { a: 1 });
   assert.equal(readTable(p, "nothing"), null);
+});
+
+test("a table name that is not one file name is refused, and nothing outside tables/ changes", () => {
+  const p = newRun();
+  const state = fs.readFileSync(p.state, "utf8");
+  for (const name of ["../state", "clauses-models/lodestar", "a\\b", ""]) {
+    assert.throws(() => saveTable(p, name, { hijacked: true }), /one folder or file name/, name);
+  }
+  assert.throws(() => readTable(p, "../state"), /one folder or file name/);
+  assert.equal(fs.readFileSync(p.state, "utf8"), state);
 });

@@ -65,6 +65,12 @@ function pathsOf(root: string): RunPaths {
   };
 }
 
+// A name the run folder uses as one folder or file name: never empty, never holding a path separator.
+function oneName(name: string, what: string): string {
+  if (name === "" || /[/\\]/.test(name)) throw new Error(`${what} must be one folder or file name: "${name}"`);
+  return name;
+}
+
 // The real path of a folder, even one that does not exist yet: its nearest existing parent, resolved, plus the rest.
 function realPathOf(folder: string): string {
   const parent = path.dirname(folder);
@@ -85,11 +91,11 @@ function freshState(repo: string): RunState {
 // and a fresh state. The folder must be outside the repo.
 export function createRun(repoName: string, startedAt: Date, base: string, repoRoot: string): RunPaths {
   const repo = fs.realpathSync(repoRoot);
-  if ((realPathOf(base) + path.sep).startsWith(repo + path.sep)) {
-    throw new Error(`the run folder must be outside the repo: ${base} is inside ${repoRoot}`);
-  }
   const startTime = utcSeconds(startedAt).replace(/[-:]/g, "");
-  const p = pathsOf(path.join(base, `${repoName}-${startTime}`));
+  const p = pathsOf(path.join(base, `${oneName(repoName, "the repo's name")}-${startTime}`));
+  if ((realPathOf(p.root) + path.sep).startsWith(repo + path.sep)) {
+    throw new Error(`the run folder must be outside the repo: ${p.root} is inside ${repoRoot}`);
+  }
   fs.mkdirSync(base, { recursive: true });
   fs.mkdirSync(p.root);
   for (const folder of [p.tables, p.jev, p.checkers, p.packs, p.evidence]) fs.mkdirSync(folder);
@@ -123,11 +129,13 @@ export function saveState(p: RunPaths, s: RunState): void {
   writeWhole(p.state, JSON.stringify(s, null, 2) + "\n");
 }
 
+const tableFile = (p: RunPaths, name: string) => path.join(p.tables, `${oneName(name, "a table's name")}.json`);
+
 export function saveTable(p: RunPaths, name: string, value: unknown): void {
-  writeWhole(path.join(p.tables, `${name}.json`), JSON.stringify(value, null, 2) + "\n");
+  writeWhole(tableFile(p, name), JSON.stringify(value, null, 2) + "\n");
 }
 
 export function readTable<T>(p: RunPaths, name: string): T | null {
-  const file = path.join(p.tables, `${name}.json`);
+  const file = tableFile(p, name);
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
 }
