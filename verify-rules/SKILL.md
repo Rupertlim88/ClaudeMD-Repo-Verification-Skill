@@ -74,6 +74,44 @@ other text of the skill; from then on, that CLAUDE.md wins.
     very dangerous actions, because usually what I ask it to do is just run. Don't stop until [it's] done." Questions
     are asked in batches, and work goes on with everything that does not depend on them.
 
+## How to run this version
+
+Every tool is one command: `V="node <this folder>/bin/verify.ts"` (in a repo, `.claude/skills/verify-rules`; on
+the user's computer, `~/.claude/skills/verify-rules`). `$V` alone prints every command. Each command says what to do
+next; with `--run "$RUN"`, `rules`, `ties`, `clauses` and `items` also capture their output in the run folder, and
+only captured outputs may be a check's evidence.
+
+**Automated now:** the run folder, state, record (a hash chain), status file and question log; the situation's
+first guess; the rule reader; the two-way tie check, with the default exempt list; the clause tables and their
+floors; the items of the user's four-part tie check; every Jev question (fixed, in `checks/questions.json`), its
+state, the call, its thresholds and its record; the Jev money budget; the Claude checker's fixed prompt
+(`checks/checker-prompt.md`) and the reading of its answer. **By hand for now:** everything else the steps below
+say, done by the doer and judged by the Claude checker: steps 1 to 11 and 13 as their branch files say, whether a
+clause is tested (the mutation runner has no command yet), part 3's piece-by-piece mapping, part 4's candidate rules
+from outside the file's CLAUDE.md, canaries, golden outputs, and the end-of-run report.
+
+1. **Step 0.** `$V start <repo> --doer <your model id>` prints the run folder (`RUN=…`) and the situation. Ask the
+   budgets: `$V log-question --run "$RUN" --kind c --topic budgets <<'Q'` with the question, ask it word for word,
+   then `$V log-answer --run "$RUN" --id q1 <<'A'` with the user's answer exactly as typed, and
+   `$V budget --run "$RUN" --question q1 --usd <amount> --claude-runs <count>`. Then `$V rules <repo> --run "$RUN"`,
+   `$V ties <repo> --run "$RUN"` and `$V clauses <repo> --run "$RUN"`; run each test command through
+   `$V capture --run "$RUN" --name tests -- <command>`. Log every other question the same way.
+2. **Steps 1 to 11:** do each step as written below, with `rules`, `ties`, `clauses` and `capture` for its evidence.
+3. **The tie-stage check (steps 12 and 14):** `$V step --run "$RUN" --step tie`, then `$V items <repo> --run "$RUN"`
+   (`--folder <path>` for one folder). Run every `jev` command it prints, unchanged, one item at a time.
+4. **After every item and step, the three checks.** Jev: `$V jev --run "$RUN" --item <step>.<item> --template
+   correct|same-code|same-meaning|complete --step <SKILL.md step> [--rule "<bold sentence>"] [--file <path>]
+   --evidence evidence/<file>`; at the end, `--template whole-process --step 14`. Then the Claude checker: run
+   `$V checker-prompt --run "$RUN" --step <step>`, and give its output, unchanged, as the prompt of the Agent tool on
+   a different Claude model from yours (sonnet when you are Opus, or fable). The checker saves its own answer with
+   `checker-answer`. A step passes only when Jev and the checker both pass it.
+5. **Reading Jev.** Each answer prints p and PASS, FAIL or UNSURE under its question's thresholds. A "may only fail"
+   question is never a pass, so the script and the checker decide it; UNSURE goes to `branches/jev-unsure.md`;
+   UNUSABLE (another provider served it) goes to `branches/checker-unusable.md`. Jev needs `AI_GATEWAY_API_KEY`; in a
+   cloud session whose proxy adds the key, prefix each `jev` command with `AI_GATEWAY_API_KEY=proxy-injected
+   NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt NODE_NO_WARNINGS=1`.
+6. **At any time**, `$V status --run "$RUN"` prints the status file; give the user its path.
+
 ## How a run goes
 
 These instructions are written for the agent that runs the skill, which may have no memory of how they came about,
