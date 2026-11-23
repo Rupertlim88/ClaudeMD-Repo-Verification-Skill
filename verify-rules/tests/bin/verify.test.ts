@@ -103,6 +103,7 @@ test("items prints every item's fixed question and the jev command that asks it"
   assert.match(out, /Q: Does `part\/dots\.py` carry out this clause of its rule: 'It never counts a dot twice\.'\?/);
   assert.match(out, /verify\.ts jev --run "\$RUN" --item 'tie\.p2:part\/dots\.py#c3' --template tie-part2-clause --rule 'Dots are found\.' --file 'part\/dots\.py'/);
   assert.match(out, /part 4/);
+  assert.match(verify(["items", makeRepo(TIED), "--python", "python3"]).out, /--file 'part\/dots\.py' --python 'python3'$/m);
 });
 
 test("jev refuses an item the item list does not hold, a mismatched rule, and evidence verify did not capture", () => {

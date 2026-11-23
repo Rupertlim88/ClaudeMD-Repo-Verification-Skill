@@ -139,16 +139,18 @@ const NOT_AUTOMATED = [
   "part 4: candidate rules found by key words outside the file's own CLAUDE.md, and the per-sentence follow-up",
 ];
 
-function jevCommandOf(item: TieItem, run: string | undefined): string {
-  const rule = (item.candidate ?? item.rule).bold!;
+function jevCommandOf(item: TieItem, a: Args): string {
+  const run = one(a, "run");
+  const python = one(a, "python");
   return `node ${shell(SELF)} jev --run ${run === undefined ? `"$RUN"` : quote(run)} --item ${quote(item.id)} --template ${item.template} ` +
-    `--rule ${quote(rule)}${item.file === null ? "" : ` --file ${quote(item.file)}`}`;
+    `--rule ${quote((item.candidate ?? item.rule).bold!)}${item.file === null ? "" : ` --file ${quote(item.file)}`}` +
+    (python === undefined ? "" : ` --python ${quote(python.includes("/") ? path.resolve(python) : python)}`);
 }
 
 async function itemsCommand(repo: string, a: Args): Promise<Output> {
   const { view, report, languages } = await tieReport(repo, a);
   const { items } = tieItems(view, report, languages, one(a, "folder") ?? "");
-  if (a.json) return { text: JSON.stringify(items.map((i) => ({ ...i, command: jevCommandOf(i, one(a, "run")) })), null, 2), code: 0 };
+  if (a.json) return { text: JSON.stringify(items.map((i) => ({ ...i, command: jevCommandOf(i, a) })), null, 2), code: 0 };
   const count = (part: TieItem["part"]) => items.filter((i) => i.part === part).length;
   const lines = [
     `The user's four-part check of the two-way ties (tools: tie-stage check), built by script from ${repo}, scope: ` +
@@ -167,7 +169,7 @@ async function itemsCommand(repo: string, a: Args): Promise<Output> {
           (item.file === null ? "" : `; the file: ${item.file}`));
     }
     lines.push(`  [part ${item.part}] ${item.id}`, `    Q: ${item.question}`,
-      `    the state holds: ${QUESTIONS.templates[item.template].holds}`, `    $ ${jevCommandOf(item, one(a, "run"))}`);
+      `    the state holds: ${QUESTIONS.templates[item.template].holds}`, `    $ ${jevCommandOf(item, a)}`);
   }
   return { text: lines.join("\n"), code: 0 };
 }
