@@ -1,0 +1,225 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { test } from "node:test";
+import { copiedOpening, readAll, readClaudeMd, ruleKey } from "../../rules/rule-reader.ts";
+
+const BLOCK = `## System Rules
+
+### Persona
+
+You are a careful engineer.
+
+| Tool | Use |
+|---|---|
+| tests | always |
+
+- Plain words, short sentences.
+1. Run every test.
+`;
+
+const GLOBAL = `# Project — global rules
+
+## What the CLAUDE.md files are
+Summary line one.
+
+Summary line two.
+
+## Rules about the CLAUDE.md files
+
+1. **Never change a CLAUDE.md unless the user directly asks you to.** Rest of rule one.
+
+2. **The CLAUDE.md files that are allowed.** Only these:
+   - **Global**: the one at the root.
+   - **Part**: the one in the part folder.
+
+${BLOCK}
+## How work is done
+
+3. **Test first, always.** Write a failing test first.
+`;
+
+const LOWER = `# Part — rules
+
+## What the CLAUDE.md files are
+Summary line one.
+
+Summary line two.
+
+## The rule never to change a CLAUDE.md (copied)
+
+1. **Never change a CLAUDE.md unless the user directly asks you to.** Rest of rule one.
+
+Stray scope line.
+
+## How it works
+
+- **A rule with sub-rules.** First sentence.
+  - **A sub-rule.** It holds 5 things.
+  1. A sub-rule with no bold sentence.
+  *File:* \`a.py\`
+- **Second rule.** Only one.
+  *File:* the whole folder
+- an unnamed rule
+4. **A numbered rule.** Its number is kept.
+`;
+
+const read = (text: string, global = GLOBAL) => readClaudeMd("x/CLAUDE.md", text, global);
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
+test("reads numbered rules and top-level bold bullets, with bold sentence, number, span, category and file line", () => {
+  const r = read(LOWER).rules;
+  assert.deepEqual(r.map((x) => [x.bold, x.number, x.indent, x.startLine, x.endLine, x.category]), [
+    ["A rule with sub-rules.", null, 0, 16, 18, "How it works"],
+    ["Second rule.", null, 0, 20, 20, "How it works"],
+    [null, null, 0, 22, 22, "How it works"],
+    ["A numbered rule.", 4, 0, 23, 23, "How it works"],
+  ]);
+  assert.deepEqual(r[0].fileLine, { kind: "path", path: "a.py", line: 19 });
+  assert.deepEqual(r[1].fileLine, { kind: "whole-folder", line: 21 });
+  assert.equal(r[0].text,
+    "- **A rule with sub-rules.** First sentence.\n  - **A sub-rule.** It holds 5 things.\n  1. A sub-rule with no bold sentence.");
+  assert.equal(r[0].claude, "x/CLAUDE.md");
+  assert.equal(r[0].key, "x/CLAUDE.md::A rule with sub-rules.");
+});
+
+test("an item with no bold sentence is read as unnamed, never skipped", () => {
+  const unnamed = read(LOWER).rules[2];
+  assert.equal(unnamed.bold, null);
+  assert.equal(unnamed.text, "- an unnamed rule");
+  assert.equal(unnamed.key, `x/CLAUDE.md::unnamed::${sha256("- an unnamed rule").slice(0, 12)}`);
+  assert.equal(read("## A\n\n- Bold **inside** an item is not its bold sentence.\n").rules[0].bold, null);
+});
+
+test("ruleKey joins the CLAUDE.md and the bold sentence, or a hash of the text for an unnamed rule", () => {
+  assert.equal(ruleKey("a/CLAUDE.md", "Same.", "- **Same.** One."), "a/CLAUDE.md::Same.");
+  assert.equal(ruleKey("a/CLAUDE.md", null, "- one"), `a/CLAUDE.md::unnamed::${sha256("- one").slice(0, 12)}`);
+});
+
+test("copiedOpening is the global summary section and its rule never to change a CLAUDE.md, line for line", () =>
+  assert.deepEqual(copiedOpening(GLOBAL), [
+    "## What the CLAUDE.md files are", "Summary line one.", "", "Summary line two.",
+    "1. **Never change a CLAUDE.md unless the user directly asks you to.** Rest of rule one.",
+  ]));
+
+test("the copied opening is skipped by its exact lines; a later section whose heading starts like the opening's is still read", () => {
+  assert.deepEqual(read(LOWER).skipped, [{ kind: "copied opening", start: 3, end: 10 }]);
+  const lookAlike = read(LOWER + "\n## What the CLAUDE.md files are\n\n- **Own rule.**\n\n" +
+    "## The rule never to change a CLAUDE.md\n\n- **Third rule.**\n");
+  assert.deepEqual(lookAlike.rules.slice(4).map((r) => r.bold), ["Own rule.", "Third rule."]);
+  const twice = read(LOWER + "\n## Again\n\n1. **Never change a CLAUDE.md unless the user directly asks you to.** Rest of rule one.\n");
+  assert.deepEqual(twice.rules.slice(4).map((r) => r.number), [1]);
+});
+
+test("a copy of the summary that differs by one character is not skipped: its lines are stray", () => {
+  const drifted = read(LOWER.replace("Summary line two.", "Summary line two!"));
+  assert.deepEqual(drifted.skipped, [{ kind: "copied opening", start: 10, end: 10 }]);
+  assert.deepEqual(drifted.stray.map((s) => s.line), [4, 6, 12]);
+});
+
+test("a '## System Rules' section is one skipped unit, matched by its exact text", () => {
+  const res = read(LOWER + "\n" + BLOCK);
+  assert.deepEqual(res.skipped.map((s) => s.kind), ["copied opening", "system rules block"]);
+  assert.deepEqual(res.skipped[1], { kind: "system rules block", start: 25, end: 36 });
+  assert.equal(res.rules.length, 4);
+  assert.deepEqual(res.stray.map((s) => s.line), [12]);
+  const different = read(LOWER + "\n" + BLOCK.replace("Run every test.", "Run some tests."));
+  assert.deepEqual(different.skipped.map((s) => s.kind), ["copied opening"]);
+  assert.deepEqual(different.rules.slice(4).map((r) => r.text), ["- Plain words, short sentences.", "1. Run some tests."]);
+});
+
+test("in the global CLAUDE.md the summary and the block are skipped, and the rule never to change a CLAUDE.md is read", () => {
+  const res = readClaudeMd("CLAUDE.md", GLOBAL, GLOBAL);
+  assert.deepEqual(res.skipped, [{ kind: "global summary", start: 3, end: 6 }, { kind: "system rules block", start: 16, end: 27 }]);
+  assert.deepEqual(res.rules.map((r) => [r.number, r.bold]), [
+    [1, "Never change a CLAUDE.md unless the user directly asks you to."],
+    [2, "The CLAUDE.md files that are allowed."],
+    [3, "Test first, always."],
+  ]);
+  assert.deepEqual(res.stray, []);
+});
+
+test("a rule's text keeps its indented lines, fenced blocks, tables and tags whole, and ends at the next rule, heading or file line", () => {
+  const text = [
+    "## Shapes", "",
+    "1. **A rule with a block.** *(NIST REC-API-3)* It sends:", "",
+    "   ```", "   # not a heading", "- not a rule", "   ```", "",
+    "   | a | b |", "   |---|---|", "",
+    "   More text after a blank line.",
+    "2. **Next rule.** Ends the one before.",
+    "   *File:* `n.py`",
+    "- **Third.** Ends at the heading.",
+    "## Next", "",
+  ].join("\n");
+  const res = read(text);
+  assert.deepEqual(res.rules.map((r) => [r.bold, r.startLine, r.endLine, r.category]), [
+    ["A rule with a block.", 3, 13, "Shapes"],
+    ["Next rule.", 14, 14, "Shapes"],
+    ["Third.", 16, 16, "Shapes"],
+  ]);
+  assert.equal(res.rules[0].text, text.split("\n").slice(2, 13).join("\n"));
+  assert.deepEqual(res.rules[0].subrules, []);
+  assert.deepEqual([res.stray, res.problems], [[], []]);
+});
+
+test("a sub-rule, with or without a bold sentence, is part of its parent's text and listed in subrules", () => {
+  const r = read(LOWER).rules;
+  assert.deepEqual(r[0].subrules, [{ bold: "A sub-rule.", line: 17 }, { bold: null, line: 18 }]);
+  assert.ok(r[0].text.includes("1. A sub-rule with no bold sentence."));
+  assert.equal(r.length, 4);
+});
+
+test("bold sentences keep every character exactly", () =>
+  assert.equal(read("## A\n\n- **Size is 64 × 64 px, 4 %: it’s fixed —** More.\n").rules[0].bold,
+    "Size is 64 × 64 px, 4 %: it’s fixed —"));
+
+test("a CRLF file reads the same rules as its LF copy", () => {
+  const crlf = (text: string) => text.replace(/\n/g, "\r\n");
+  assert.deepEqual(read(crlf(LOWER)), read(LOWER));
+  assert.deepEqual(read(crlf(LOWER), crlf(GLOBAL)), read(LOWER));
+});
+
+test("non-blank lines outside a heading, the opening, the block, a rule and a file line are stray, with their lines", () => {
+  assert.deepEqual(read(LOWER).stray, [{ line: 12, text: "Stray scope line." }]);
+  const res = read("## A\n\n- **One.** Text.\nA line straight after the rule is its text.\n\nA paragraph at the margin.\n" +
+    "  An indented line after it.\n\n```\n- code outside any rule\n```\n");
+  assert.equal(res.rules[0].text, "- **One.** Text.\nA line straight after the rule is its text.");
+  assert.deepEqual(res.stray, [{ line: 6, text: "A paragraph at the margin." }, { line: 7, text: "  An indented line after it." }]);
+  assert.equal(res.rules.length, 1);
+});
+
+test("a file line not directly under its rule, and a second file line, are problems", () => {
+  const res = read([
+    "## A", "",
+    "- **One.**", "",
+    "  *File:* `a.py`",
+    "- **Two.**",
+    "  *File:* `b.py`",
+    "  *File:* `c.py`", "",
+    "## B",
+    "  *File:* `d.py`",
+    "- **Three.**",
+    "  *File:* needed",
+    "- **Four.**",
+    "  *File:* somewhere",
+  ].join("\n"));
+  assert.deepEqual(res.problems, [
+    { line: 5, text: "  *File:* `a.py`", problem: "a file line is not directly under its rule's text" },
+    { line: 8, text: "  *File:* `c.py`", problem: "a rule names two files" },
+    { line: 11, text: "  *File:* `d.py`", problem: "a file line is not directly under its rule's text" },
+    { line: 15, text: "  *File:* somewhere", problem: "a file line names no file, nor 'the whole folder' or 'needed'" },
+  ]);
+  assert.deepEqual(res.rules.map((r) => r.fileLine), [
+    null, { kind: "path", path: "b.py", line: 7 }, { kind: "needed", line: 13 }, null,
+  ]);
+});
+
+test("readAll reads every CLAUDE.md against the global one; two rules with the same number are both read", () => {
+  const all = readAll(new Map([
+    ["CLAUDE.md", GLOBAL], ["part/CLAUDE.md", LOWER], ["a/CLAUDE.md", "## A\n\n3. **Rule in a.**\n"],
+    ["b/CLAUDE.md", "## B\n\n3. **Rule in b.**\n"], ["a/x.py", "x = 1\n"],
+  ]));
+  assert.deepEqual([...all.keys()], ["CLAUDE.md", "part/CLAUDE.md", "a/CLAUDE.md", "b/CLAUDE.md"]);
+  assert.deepEqual(all.get("part/CLAUDE.md")!.skipped.map((s) => s.kind), ["copied opening"]);
+  const threes = [...all.values()].flatMap((r) => r.rules).filter((r) => r.number === 3);
+  assert.deepEqual(threes.map((r) => r.key), ["CLAUDE.md::Test first, always.", "a/CLAUDE.md::Rule in a.", "b/CLAUDE.md::Rule in b."]);
+});
