@@ -8,6 +8,8 @@ import path from "node:path";
 import { utcSeconds, withLock, writeWhole, type RunPaths, type StepId } from "./state.ts";
 
 const EMPTY_HEAD = "0".repeat(64);
+// The fields append sets on every entry, which a caller's fields may not hold.
+const SET_BY_RECORD = ["t", "kind", "chain"] as const;
 
 // JSON with the keys of every object sorted, so the same entry always gives the same text.
 export function canonicalJson(v: unknown): string {
@@ -33,6 +35,8 @@ export function chainHead(p: RunPaths): string {
 // Adds one entry, holding the run folder's lock, and returns its chain hash: the SHA-256 of the previous hash
 // followed by the entry's JSON.
 export function append(p: RunPaths, kind: string, fields: Record<string, unknown>, now = new Date()): string {
+  const taken = SET_BY_RECORD.filter((name) => name in fields);
+  if (taken.length > 0) throw new Error(`an entry's ${taken.join(" and ")} is set by the record, not by its fields`);
   const entry = { ...fields, t: utcSeconds(now), kind };
   return withLock(p, () => {
     const chain = sha256(chainHead(p) + canonicalJson(entry));

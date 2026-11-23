@@ -46,10 +46,12 @@ test("chainHead is 64 zeros for an empty record, then the last entry's hash", ()
   assert.equal(chainHead(p), h2);
 });
 
-test("a field cannot replace an entry's time or kind", () => {
+test("a field cannot replace an entry's time, kind or chain: append refuses it and adds nothing", () => {
   const { p } = newRun();
-  const h = append(p, "verdict", { t: "1999-01-01T00:00:00Z", kind: "approval" }, t0);
-  assert.equal(h, sha256("0".repeat(64) + '{"kind":"verdict","t":"2026-11-23T05:48:54Z"}'));
+  for (const name of ["t", "kind", "chain"]) {
+    assert.throws(() => append(p, "verdict", { [name]: "x", item: "7.c1" }, t0), /set by the record/, name);
+  }
+  assert.equal(fs.readFileSync(p.record, "utf8"), "");
 });
 
 test("four processes appending at once lose no entry, and the chain verifies", async () => {
