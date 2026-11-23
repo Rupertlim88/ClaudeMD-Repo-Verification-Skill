@@ -71,6 +71,11 @@ function oneName(name: string, what: string): string {
   return name;
 }
 
+// Whether a path is the folder itself or inside it. Both paths are absolute.
+export function within(folder: string, file: string): boolean {
+  return (path.resolve(file) + path.sep).startsWith(path.resolve(folder) + path.sep);
+}
+
 // The real path of a folder, even one that does not exist yet: its nearest existing parent, resolved, plus the rest.
 function realPathOf(folder: string): string {
   const parent = path.dirname(folder);
@@ -93,7 +98,7 @@ export function createRun(repoName: string, startedAt: Date, base: string, repoR
   const repo = fs.realpathSync(repoRoot);
   const startTime = utcSeconds(startedAt).replace(/[-:]/g, "");
   const p = pathsOf(path.join(base, `${oneName(repoName, "the repo's name")}-${startTime}`));
-  if ((realPathOf(p.root) + path.sep).startsWith(repo + path.sep)) {
+  if (within(repo, realPathOf(p.root))) {
     throw new Error(`the run folder must be outside the repo: ${p.root} is inside ${repoRoot}`);
   }
   fs.mkdirSync(base, { recursive: true });

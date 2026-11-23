@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { test } from "node:test";
-import { append, canonicalJson, chainHead, trailers, verifyRecord } from "../../run/record.ts";
+import { append, canonicalJson, capture, chainHead, trailers, verifyRecord } from "../../run/record.ts";
 import { createRun, type RunPaths } from "../../run/state.ts";
 import { atOnce } from "../helpers/at-once.ts";
 import { git, makeRepo, tmpDir } from "../helpers/tmp.ts";
@@ -33,23 +34,23 @@ function checkpointCommit(repo: string, lines: string[]): string {
 test("each entry carries the SHA-256 of the previous hash and its own sorted JSON", () => {
   const { p } = newRun();
   const h1 = append(p, "start", { a: 1 }, t0);
-  const h2 = append(p, "verdict", { b: 2 }, t0);
+  const h2 = append(p, "step", { b: 2 }, t0);
   assert.equal(h1, sha256("0".repeat(64) + '{"a":1,"kind":"start","t":"2026-11-23T05:48:54Z"}'));
-  assert.equal(h2, sha256(h1 + '{"b":2,"kind":"verdict","t":"2026-11-23T05:48:54Z"}'));
+  assert.equal(h2, sha256(h1 + '{"b":2,"kind":"step","t":"2026-11-23T05:48:54Z"}'));
 });
 
 test("chainHead is 64 zeros for an empty record, then the last entry's hash", () => {
   const { p } = newRun();
   assert.equal(chainHead(p), "0".repeat(64));
   append(p, "start", {}, t0);
-  const h2 = append(p, "verdict", { b: 2 }, t0);
+  const h2 = append(p, "step", { b: 2 }, t0);
   assert.equal(chainHead(p), h2);
 });
 
 test("a field cannot replace an entry's time, kind or chain: append refuses it and adds nothing", () => {
   const { p } = newRun();
   for (const name of ["t", "kind", "chain"]) {
-    assert.throws(() => append(p, "verdict", { [name]: "x", item: "7.c1" }, t0), /set by the record/, name);
+    assert.throws(() => append(p, "note", { [name]: "x", item: "7.c1" }, t0), /set by the record/, name);
   }
   assert.equal(fs.readFileSync(p.record, "utf8"), "");
 });
@@ -68,15 +69,15 @@ test("four processes appending at once lose no entry, and the chain verifies", a
 test("verifyRecord passes an untouched record, with its head and its number of entries", () => {
   const { p, repo } = newRun();
   append(p, "start", { a: 1 }, t0);
-  const h2 = append(p, "verdict", { b: 2 }, t0);
+  const h2 = append(p, "step", { b: 2 }, t0);
   assert.deepEqual(verifyRecord(p, repo, "main"), { ok: true, head: h2, entries: 2 });
 });
 
 test("verifyRecord names an edited entry by its line", () => {
   const { p, repo } = newRun();
   append(p, "start", { a: 1 }, t0);
-  append(p, "verdict", { b: 2 }, t0);
-  append(p, "verdict", { c: 3 }, t0);
+  append(p, "step", { b: 2 }, t0);
+  append(p, "step", { c: 3 }, t0);
   editRecord(p, (lines) => lines.map((line, i) => (i === 1 ? line.replace('"b":2', '"b":3') : line)));
   assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 does not follow from the line before it" });
 });
@@ -84,8 +85,8 @@ test("verifyRecord names an edited entry by its line", () => {
 test("verifyRecord names a deleted entry at the line after it", () => {
   const { p, repo } = newRun();
   append(p, "start", { a: 1 }, t0);
-  append(p, "verdict", { b: 2 }, t0);
-  append(p, "verdict", { c: 3 }, t0);
+  append(p, "step", { b: 2 }, t0);
+  append(p, "step", { c: 3 }, t0);
   editRecord(p, (lines) => [lines[0], lines[2]]);
   assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 does not follow from the line before it" });
 });
@@ -93,7 +94,7 @@ test("verifyRecord names a deleted entry at the line after it", () => {
 test("verifyRecord names a line that is not a JSON object, rather than throwing", () => {
   const { p, repo } = newRun();
   append(p, "start", { a: 1 }, t0);
-  append(p, "verdict", { b: 2 }, t0);
+  append(p, "step", { b: 2 }, t0);
   for (const bad of ['{"b":2,', "null"]) {
     editRecord(p, (lines) => [lines[0], bad]);
     assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 is not a JSON object" }, bad);
@@ -103,7 +104,8 @@ test("verifyRecord names a line that is not a JSON object, rather than throwing"
 test("verifyRecord fails an edited entry even when every trailer still names a hash in the record", () => {
   const { p, repo } = newRun();
   append(p, "start", {}, t0);
-  append(p, "verdict", { item: "7.c1", verdict: "FAIL" }, t0);
+  fs.writeFileSync(path.join(p.checkers, "c1.json"), "FAIL\n");
+  append(p, "verdict", { step: "7", verdict: "FAIL", output: capture(p, "checkers/c1.json") }, t0);
   checkpointCommit(repo, trailers(p, "7", 1));
   editRecord(p, (lines) => lines.map((line) => line.replace('"FAIL"', '"PASS"')));
   assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 does not follow from the line before it" });
@@ -120,8 +122,8 @@ test("verifyRecord passes when every trailer is a chain hash in order, and names
   const { p, repo } = newRun();
   append(p, "start", {}, t0);
   checkpointCommit(repo, trailers(p, "0", 1));
-  append(p, "verdict", { b: 2 }, t0);
-  append(p, "verdict", { c: 3 }, t0);
+  append(p, "step", { b: 2 }, t0);
+  append(p, "step", { c: 3 }, t0);
   checkpointCommit(repo, trailers(p, "7", 1));
   assert.equal(verifyRecord(p, repo, "main").ok, true);
 
@@ -133,7 +135,7 @@ test("verifyRecord passes when every trailer is a chain hash in order, and names
 test("verifyRecord names a commit whose trailer goes back in the chain, or stays at the same hash", () => {
   const { p, repo } = newRun();
   const h1 = append(p, "start", {}, t0);
-  append(p, "verdict", { b: 2 }, t0);
+  append(p, "step", { b: 2 }, t0);
   checkpointCommit(repo, trailers(p, "0", 1));
   const same = checkpointCommit(repo, trailers(p, "7", 1));
   const later = (commit: string) =>
@@ -162,6 +164,49 @@ test("verifyRecord reads the branch even when a file in the repo has the branch'
   append(p, "start", {}, t0);
   checkpointCommit(repo, trailers(p, "0", 1));
   assert.equal(verifyRecord(p, repo, "main").ok, true);
+});
+
+test("capture names a file in the run folder, from the run folder, by the SHA-256 of its bytes", () => {
+  const { p } = newRun();
+  fs.writeFileSync(path.join(p.checkers, "c1.json"), "PASS\n");
+  assert.deepEqual(capture(p, "checkers/c1.json"), { file: "checkers/c1.json", sha256: sha256("PASS\n") });
+  assert.deepEqual(capture(p, path.join(p.root, "checkers", "c1.json")), capture(p, "checkers/c1.json"));
+});
+
+test("capture refuses a file outside the run folder", () => {
+  const { p, repo } = newRun();
+  for (const file of [path.join(repo, "a.py"), "../outside.txt"]) {
+    assert.throws(() => capture(p, file), /a file in the run folder/, file);
+  }
+});
+
+test("an answer or a verdict without its captured output is refused, and nothing is added", () => {
+  const { p } = newRun();
+  for (const kind of ["answer", "verdict"]) {
+    assert.throws(() => append(p, kind, { item: "7.c1", verdict: "PASS" }, t0), /must name its captured output/, kind);
+  }
+  assert.equal(fs.readFileSync(p.record, "utf8"), "");
+});
+
+test("an output that does not hash as it is named is refused", () => {
+  const { p } = newRun();
+  fs.writeFileSync(path.join(p.jev, "r1.json"), "{}\n");
+  const output = { file: "jev/r1.json", sha256: "0".repeat(64) };
+  assert.throws(() => append(p, "answer", { item: "7.c1", verdict: "PASS", output }, t0), /was changed/);
+});
+
+test("verifyRecord fails a verdict whose captured file is changed or missing", () => {
+  const { p, repo } = newRun();
+  const file = path.join(p.checkers, "c1.json");
+  fs.writeFileSync(file, "FAIL\n");
+  append(p, "verdict", { step: "7", verdict: "FAIL", output: capture(p, "checkers/c1.json") }, t0);
+  assert.equal(verifyRecord(p, repo, "main").ok, true);
+  fs.writeFileSync(file, "PASS\n");
+  assert.deepEqual(verifyRecord(p, repo, "main"),
+    { ok: false, problem: "line 1: the captured output checkers/c1.json was changed" });
+  fs.rmSync(file);
+  assert.deepEqual(verifyRecord(p, repo, "main"),
+    { ok: false, problem: "line 1: the captured output checkers/c1.json is missing" });
 });
 
 test("canonicalJson sorts keys at every depth, and keeps the order of lists", () =>

@@ -19,5 +19,5 @@ if (what === "count") {
 
 if (what === "append") {
   const [root, writer, times] = args;
-  for (let i = 0; i < Number(times); i++) append(openRun(root), "verdict", { writer, i });
+  for (let i = 0; i < Number(times); i++) append(openRun(root), "note", { writer, i });
 }
