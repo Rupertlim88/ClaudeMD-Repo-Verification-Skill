@@ -327,3 +327,16 @@ test("unnamed rules with the same text get distinct keys, the first as ruleKey g
   assert.equal(ruleKey("x/CLAUDE.md", null, "- the same words", 2), `${first}::2`);
   assert.equal(ruleKey("x/CLAUDE.md", "Named.", "- **Named.**", 2), "x/CLAUDE.md::Named.");
 });
+
+test("in the global CLAUDE.md, an item in the summary is a problem, and the System Rules block is listed for a later version", () => {
+  const global = SMALL_GLOBAL.replace("Summary.\n", "Summary.\n- **Hidden in the summary.** Never read.\n") +
+    "\n## System Rules\n\n- **In the block.**\n3. **Also in it.**\n";
+  const res = readClaudeMd("CLAUDE.md", global, global);
+  assert.deepEqual(res.problems,
+    [{ line: 5, text: "- **Hidden in the summary.** Never read.", problem: "an item in the global's summary is never read as a rule" }]);
+  assert.deepEqual(res.laterVersion, [{ kind: "system rules block", start: 11, end: 14 }]);
+  assert.deepEqual(res.skipped.map((s) => s.kind), ["global summary", "system rules block"]);
+  const lower = readClaudeMd("x/CLAUDE.md", "# L\n\n## What the CLAUDE.md files are\nSummary.\n- **Hidden in the summary.** Never read.\n" +
+    "\n## System Rules\n\n- **In the block.**\n3. **Also in it.**\n", global);
+  assert.deepEqual([lower.skipped.map((s) => s.kind), lower.problems, lower.laterVersion], [["copied opening", "system rules block"], [], []]);
+});

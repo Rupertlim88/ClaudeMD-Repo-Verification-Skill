@@ -19,6 +19,9 @@ type SkippedKind = "copied opening" | "global summary" | "system rules block";
 export interface ReadResult {
   rules: Rule[]; skipped: { kind: SkippedKind; start: number; end: number }[];
   stray: { line: number; text: string }[]; problems: { line: number; text: string; problem: string }[];
+  // The skipped parts that version 1 does not check, for the gate to list as later-version items: the global
+  // CLAUDE.md's own System Rules block, found by its heading until milestone L2 checks it against its reference.
+  laterVersion: { kind: "system rules block"; start: number; end: number }[];
 }
 
 const GLOBAL = "CLAUDE.md";
@@ -159,7 +162,7 @@ function fileLine(value: RegExpExecArray, line: number): FileLine {
 export function readClaudeMd(claude: string, text: string, globalText: string): ReadResult {
   const all = lines(text);
   const units = skippedUnits(claude, globalText);
-  const result: ReadResult = { rules: [], skipped: [], stray: [], problems: [] };
+  const result: ReadResult = { rules: [], skipped: [], stray: [], problems: [], laterVersion: [] };
   let rule: Rule | null = null;           // the rule whose text the next line may go on
   let fence: Fence | null = null;         // the open fenced block, in `rule` if that is open
   let category: string | null = null;
@@ -188,6 +191,11 @@ export function readClaudeMd(claude: string, text: string, globalText: string): 
       const nextTo = last !== undefined && all.slice(last.end, i).every((l) => isBlank(l) || headingLevel(l) !== null);
       if (nextTo && last.kind === unit.kind) last.end = end;
       else result.skipped.push({ kind: unit.kind, start: n, end });
+      if (unit.kind === "system rules block" && claude === GLOBAL) result.laterVersion.push({ kind: unit.kind, start: n, end });
+      for (const [k, unitLine] of unit.lines.entries()) {
+        const problem = "an item in the global's summary is never read as a rule";
+        if (unit.kind === "global summary" && ITEM.test(unitLine)) result.problems.push({ line: n + k, text: unitLine, problem });
+      }
       i = end - 1;
       rule = null;
       continue;
