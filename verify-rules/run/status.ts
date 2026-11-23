@@ -1,9 +1,9 @@
 // The status file the user can read at any time: the step, what is being done, the items passed, the spend
 // against each budget, the open items and what waits on the user; then the current step's items and the events.
+import { WAITING_ON_USER } from "./open-items.ts";
 import { utcSeconds, writeWhole, type ItemState, type RunPaths, type RunState } from "./state.ts";
 
 const ITEM_STATES: readonly string[] = ["not started", "in progress", "done", "passed", "failed", "reopened"];
-const WAITING_ON_USER: readonly string[] = ["user-unanswered", "needs-user-only-fact"];
 
 const usd = (amount: number, decimals: number) => `$${amount.toFixed(decimals)}`;
 
@@ -28,7 +28,7 @@ export function statusLines(s: RunState, now: Date, doing: string, unpaid: { che
   const stepItems: [string, ItemState][] =
     Object.entries(s.items).filter(([id]) => s.step !== null && id.startsWith(`${s.step}.`));
   const passed = stepItems.filter(([, item]) => item.status === "passed").length;
-  const waiting = s.open.filter((open) => WAITING_ON_USER.includes(open.code)).map((open) => open.item);
+  const waiting = s.open.filter((open) => WAITING_ON_USER.has(open.code)).map((open) => open.item);
   return [
     "# verify-rules run status",
     "",
