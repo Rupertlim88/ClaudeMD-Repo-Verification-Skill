@@ -1,0 +1,16 @@
+{
+  "name": "verify-rules",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ai": "7.0.179",
+    "zod": "4.6.7"
+  }
+}
