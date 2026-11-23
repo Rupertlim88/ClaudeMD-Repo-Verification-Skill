@@ -6,7 +6,7 @@ record stays in the repo.
 
 ## 1. The core ideas
 
-These are the skill's core conceptual ideas, each in one plain sentence. Each becomes a general rule (C1 to C18,
+These are the skill's core conceptual ideas, each in one plain sentence. Each becomes a general rule (C1 to C18 and C66,
 section 3). Every other rule of the skill is grouped under the core idea it serves (section 4).
 
 1. When the user runs the skill, it brings the repo to the rule system and proves it, doing the work itself rather
@@ -38,12 +38,14 @@ section 3). Every other rule of the skill is grouped under the core idea it serv
 16. The skill is general, but very specific on every single step. (C16)
 17. Before it is used, the skill is stress-tested against the user's intent and against shortcuts. (C17)
 18. This GitHub repo is the skill's master copy, and every other copy is made from it. (C18)
+19. A run asks the user first only before very dangerous actions, and otherwise runs to the end. (C66; audit fix 5,
+    which the user already decided)
 
 ## 2. How to read this proposal
 
 - The user decides everything conceptual, and Claude does everything mechanical. So every CLAUDE.md change is shown
   as two numbered lists:
-  - **List C, conceptual** (sections 3 to 5): 65 items. First the 18 core ideas as rules (C1 to C18). Then the 45
+  - **List C, conceptual** (sections 3 to 5): 66 items. First the 19 core ideas as rules (C1 to C18, and C66, numbered last so no other number moves). Then the 45
     rules that carry them out, each grouped under the core idea it serves (C19 to C63): what-ifs, and one rule per
     planned tool file. Then the 2 open points (C64, C65). Each item gives its exact rule text, where it goes, what
     it means, and where it comes from in the user's own words.
@@ -54,7 +56,10 @@ section 3). Every other rule of the skill is grouped under the core idea it serv
   carries it.
 - **Judgment calls**, where Claude made a choice or a reading that the user should look at closely, say so in their
   heading: C45, C53, C57, C61, C62 and C63. C32 also holds one settled reading, which its text names.
-- "Spec" means `docs/workflow-spec.md`, the technical design that the skill's files will carry out. "msg N" means
+- "Spec" means the technical design that the skill's files will carry out. It was `docs/workflow-spec.md`; it is now
+  reshaped into `verify-rules/SKILL.md` (the core, the steps and the trigger table), `verify-rules/branches/` (one
+  file per trigger) and `docs/tools.md` (one section per tool), and the old file was deleted. Section numbers such as
+  "spec 6.2" refer to that file as it stands in commit e9504f6. "msg N" means
   message N of the record of the user's own words (`intent/user-intent.md` in the session's scratch folder).
 - Quotes keep the user's words. Only voice-typing slips are fixed: "role" or "row" → "rule"; "Claude MD",
   "clutter MD" or "cloud to MD" → "CLAUDE.md"; "Jeff" or "Java" → "Jev"; "P Stack" → "pstack"; "reposts" →
@@ -182,7 +187,7 @@ you have to do is actually implement it. You have to fix the gap, so you also ha
 ````
 
 *What it means.* The user asked for this rule inside the skill's folder, in these words. The skill never asks the
-user how to build something, or anything it can find out by running it. The user is asked about goals, trade-offs,
+user a mechanical question, or anything it can find out by running it (audit fix 3). The user is asked about goals, trade-offs,
 and anything that changes what a rule says.
 
 *Source.* msg 30: "within the skill folder, you definitely need to add the rule… the code handles the mechanical
@@ -407,6 +412,22 @@ sessions get copies. How a copy is made, and what it leaves out, is C62.
 *Source.* msg 30: "I think the master copy should live in my rupertlim user directory"; msg 33: "Let me make a new
 GitHub repository so that you can actually put everything there"; msg 44: "the skill is supposed to go into the
 Rupertlim88 ClaudeMD-Repo-Verification-Skill github folder"; spec 13.1.
+
+#### C66. Ask first only before very dangerous actions (audit fix 5)
+
+*Goes in:* the Skill CLAUDE.md, under "The core ideas". *Kind:* general, the whole folder.
+
+````markdown
+**A run asks the user first only before very dangerous actions, and otherwise runs to the end.** Questions are asked in batches, and work goes on with everything that does not depend on them.
+    *File:* the whole folder
+````
+
+*What it means.* The run does not stop to ask about ordinary work. It stops only before the very dangerous actions,
+and any other question is batched while independent work goes on. The user decided the content; the global rule
+M32 says the same for work on this repo, and this item makes it a rule of the skill itself (audit fix 5).
+
+*Source.* msg 39: "Regarding ask first before outside or irreversible actions, yes, sure, but only for the very
+dangerous actions, because usually what I ask it to do is just run. Don't stop until he's done."
 
 ## 4. List C, part 2: the rules under each core idea (C19 to C63)
 
@@ -636,8 +657,8 @@ required"; msg 37.
 ````markdown
 **The check of one rule, one file runs in four parts, in the user's order.** It is the most important check of the skill.
    1. If there is no file associated with a rule that needs one, the rule has failed already.
-   2. For every rule with a file attached, the rule and the file are checked to see whether everything the rule asks is satisfied.
-   3. Then every file that is not on the list of exemptions is checked against the one rule it is tied to: it does everything its rule asks, and everything in it is asked for by its rule.
+   2. For every rule with a file attached, Jev is run on the rule and the file to see whether everything the rule asks is satisfied, with a script and a Claude checker where Jev is weak.
+   3. Then every file that is not on the list of exemptions is checked against the one rule it is tied to, and Jev double-checks the file against its rule, with a script and a Claude checker where Jev is weak: it does everything its rule asks, and everything in it is asked for by its rule.
    4. A final check sees whether one file contains the jobs of several rules.
 ````
 
@@ -1222,13 +1243,15 @@ the thesis repo, with "the research" → "the skill".
 ("you choose which ones are exempted"), how Jev is asked ("it's just up to you, mechanically"), the list of very
 dangerous actions ("think hard about it and come up with some more"), and how the fourth check is built. The rule
 that every decision of the user's is written into the CLAUDE.md files (M9) could be read as covering them.
-*Suggested answer:* they stay in the spec, not in the CLAUDE.md files, because they are Claude's choices, not the
-user's; the CLAUDE.md rules say only what each part must achieve.
+*Decided as technical (audit fix 10):* they stay in the skill's own files (`verify-rules/` and `docs/tools.md`), not
+in the CLAUDE.md files, because they are Claude's choices, not the user's; the CLAUDE.md rules say only what each part
+must achieve. This is no longer a question for the user.
 
 **Q6. When the user's phone is told.** The system rule on long jobs (M35) sends a push when a run ends. The spec also
 sends one when a run stops at a failed step, when it waits on the user, and when it resumes after a usage limit
-(spec 13.5). *Suggested answer:* yes; a new general rule in the Skill CLAUDE.md, under "Records, state and stops":
-"**The user's phone is told when a run ends, stops at a step, waits on the user, or resumes.**"
+(spec 13.5). *Decided as technical (audit fix 10):* yes, the push is sent at each of those moments, as
+`verify-rules/branches/long-job-duties.md` says; since it was settled as a technical choice, it is not a question for
+the user. Only Q1 to Q4 wait for the user.
 
 ## 7. The proposed structure
 
@@ -1244,7 +1267,7 @@ claudemd-repo-verification-skill/      the repo: the skill's master copy
 │   ├── skills/                        the 15 Superpowers skills and their licence
 │   └── pstack/
 ├── docs/                              (not counted)
-│   ├── workflow-spec.md               the technical design
+│   ├── tools.md                       the tools' specification (from the reshaped spec)
 │   └── claude-md-proposal.md          this proposal, deleted once answered
 └── verify-rules/                      the skill's folder: the part that is installed
     ├── CLAUDE.md                      the Skill CLAUDE.md
@@ -1788,7 +1811,7 @@ Don't use `poteto-mode` or its playbooks. They assume Cursor, team PR fleets, ot
 ````markdown
 ## How the code is written
 
-15. **Code quality, in this order of priority: quality first, with no shortcuts; then speed; then low cost on average.**
+15. **Code quality, in this order of priority: quality first, with no shortcuts; then speed; then low cost on average.** Each repo's CLAUDE.md says what quality means there.
 ````
 
 **M22**
@@ -1987,7 +2010,7 @@ changing settings is one of the very dangerous actions.
 
 1. The title (M37).
 2. The copied opening, with rule 1 (M38).
-3. "The core ideas": C1 to C17.
+3. "The core ideas": C1 to C17, and C66.
 4. "The instructions": C19.
 5. "The three checks": C20 to C30.
 6. "The final check": C31.
