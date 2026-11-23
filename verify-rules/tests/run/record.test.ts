@@ -15,6 +15,11 @@ function newRun() {
   return { p: createRun("r", t0, tmpDir("runs"), repo), repo };
 }
 
+// A checkpoint's trailers with the record hash replaced, as a forged or out-of-order commit would carry them.
+function namingHash(p: RunPaths, head: string): string[] {
+  return trailers(p, "8", 1).map((line) => (line.startsWith("Verify-Rules-Record: ") ? `Verify-Rules-Record: ${head}` : line));
+}
+
 function editRecord(p: RunPaths, edit: (lines: string[]) => string[]): void {
   const lines = fs.readFileSync(p.record, "utf8").split("\n").filter((line) => line !== "");
   fs.writeFileSync(p.record, edit(lines).map((line) => line + "\n").join(""));
@@ -96,38 +101,65 @@ test("verifyRecord names a line that is not a JSON object, rather than throwing"
 test("verifyRecord fails an edited entry even when every trailer still names a hash in the record", () => {
   const { p, repo } = newRun();
   append(p, "start", {}, t0);
-  const h2 = append(p, "verdict", { item: "7.c1", verdict: "FAIL" }, t0);
-  checkpointCommit(repo, trailers("7", 1, h2));
+  append(p, "verdict", { item: "7.c1", verdict: "FAIL" }, t0);
+  checkpointCommit(repo, trailers(p, "7", 1));
   editRecord(p, (lines) => lines.map((line) => line.replace('"FAIL"', '"PASS"')));
   assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 does not follow from the line before it" });
 });
 
-test("trailers name the step, the round and the record's hash", () =>
-  assert.deepEqual(trailers("7", 2, "ab".repeat(32)),
-    ["Verify-Rules-Step: 7", "Verify-Rules-Round: 2", `Verify-Rules-Record: ${"ab".repeat(32)}`]));
+test("trailers name the run, the step, the round and the record's hash at that moment", () => {
+  const { p } = newRun();
+  const head = append(p, "start", {}, t0);
+  assert.deepEqual(trailers(p, "7", 2), ["Verify-Rules-Run: r-20261123T054854Z", "Verify-Rules-Step: 7",
+    "Verify-Rules-Round: 2", `Verify-Rules-Record: ${head}`]);
+});
 
 test("verifyRecord passes when every trailer is a chain hash in order, and names a commit whose trailer is not", () => {
   const { p, repo } = newRun();
-  const h1 = append(p, "start", {}, t0);
+  append(p, "start", {}, t0);
+  checkpointCommit(repo, trailers(p, "0", 1));
   append(p, "verdict", { b: 2 }, t0);
-  const h3 = append(p, "verdict", { c: 3 }, t0);
-  checkpointCommit(repo, trailers("0", 1, h1));
-  checkpointCommit(repo, trailers("7", 1, h3));
+  append(p, "verdict", { c: 3 }, t0);
+  checkpointCommit(repo, trailers(p, "7", 1));
   assert.equal(verifyRecord(p, repo, "main").ok, true);
 
-  const unknown = checkpointCommit(repo, trailers("8", 1, "f".repeat(64)));
+  const unknown = checkpointCommit(repo, namingHash(p, "f".repeat(64)));
   assert.deepEqual(verifyRecord(p, repo, "main"),
     { ok: false, problem: `commit ${unknown} names a record hash that is not in this record` });
 });
 
-test("verifyRecord names a commit whose trailer goes back in the chain", () => {
+test("verifyRecord names a commit whose trailer goes back in the chain, or stays at the same hash", () => {
   const { p, repo } = newRun();
   const h1 = append(p, "start", {}, t0);
-  const h2 = append(p, "verdict", { b: 2 }, t0);
-  checkpointCommit(repo, trailers("0", 1, h2));
-  const back = checkpointCommit(repo, trailers("7", 1, h1));
-  assert.deepEqual(verifyRecord(p, repo, "main"),
-    { ok: false, problem: `commit ${back} names a record hash no later in the chain than the checkpoint before it` });
+  append(p, "verdict", { b: 2 }, t0);
+  checkpointCommit(repo, trailers(p, "0", 1));
+  const same = checkpointCommit(repo, trailers(p, "7", 1));
+  const later = (commit: string) =>
+    ({ ok: false, problem: `commit ${commit} names a record hash no later in the chain than the checkpoint before it` });
+  assert.deepEqual(verifyRecord(p, repo, "main"), later(same));
+  git(repo, "reset", "-q", "--hard", "HEAD~1");
+  const back = checkpointCommit(repo, namingHash(p, h1));
+  assert.deepEqual(verifyRecord(p, repo, "main"), later(back));
+});
+
+test("verifyRecord checks only this run's checkpoints, so an earlier run's in the branch's history does not fail it", () => {
+  const repo = makeRepo({ "a.py": "x = 1\n" });
+  const earlier = createRun("r", t0, tmpDir("runs"), repo);
+  append(earlier, "start", {}, t0);
+  checkpointCommit(repo, trailers(earlier, "14", 1));
+  const p = createRun("r", new Date("2026-12-01T00:00:00Z"), tmpDir("runs"), repo);
+  append(p, "start", { run: 2 }, t0);
+  git(repo, "checkout", "-q", "-b", "verify-rules/run-2");
+  checkpointCommit(repo, trailers(p, "0", 1));
+  assert.equal(verifyRecord(p, repo, "verify-rules/run-2").ok, true);
+});
+
+test("verifyRecord reads the branch even when a file in the repo has the branch's name", () => {
+  const repo = makeRepo({ main: "a file named like the branch\n" });
+  const p = createRun("r", t0, tmpDir("runs"), repo);
+  append(p, "start", {}, t0);
+  checkpointCommit(repo, trailers(p, "0", 1));
+  assert.equal(verifyRecord(p, repo, "main").ok, true);
 });
 
 test("canonicalJson sorts keys at every depth, and keeps the order of lists", () =>

@@ -1,8 +1,10 @@
 // The run's record: JSON lines in the run folder, each entry chained to the one before by SHA-256, so an edit,
-// a deletion or a reordering breaks the chain. Checkpoint commits carry the record's hash as trailers.
+// a deletion or a reordering breaks the chain. Checkpoint commits carry the run's name and the record's hash as
+// trailers.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { utcSeconds, withLock, writeWhole, type RunPaths, type StepId } from "./state.ts";
 
 const EMPTY_HEAD = "0".repeat(64);
@@ -45,7 +47,7 @@ export type RecordCheck = { ok: true; head: string; entries: number } | { ok: fa
 export function verifyRecord(p: RunPaths, repoDir: string, branch: string): RecordCheck {
   const chain = verifyChain(p);
   if ("problem" in chain) return { ok: false, problem: chain.problem };
-  const problem = verifyTrailers(chain.entries, repoDir, branch);
+  const problem = verifyTrailers(p, chain.entries, repoDir, branch);
   if (problem !== null) return { ok: false, problem };
   return { ok: true, head: chain.entries.at(-1)?.chain ?? EMPTY_HEAD, entries: chain.entries.length };
 }
@@ -77,20 +79,27 @@ function jsonObject(line: string): Entry | null {
   }
 }
 
-export function trailers(step: StepId, round: number, head: string): string[] {
-  return [`Verify-Rules-Step: ${step}`, `Verify-Rules-Round: ${round}`, `Verify-Rules-Record: ${head}`];
+// A run is named by its folder: "<repo name>-<start time>".
+const runName = (p: RunPaths) => path.basename(p.root);
+
+// A checkpoint commit's trailers: the run, the step, the round, and the record's hash at this moment.
+export function trailers(p: RunPaths, step: StepId, round: number): string[] {
+  return [`Verify-Rules-Run: ${runName(p)}`, `Verify-Rules-Step: ${step}`, `Verify-Rules-Round: ${round}`,
+    `Verify-Rules-Record: ${chainHead(p)}`];
 }
 
-// Checks, oldest commit first, that each Verify-Rules-Record trailer on the branch is a hash of the record's chain,
-// later in the chain than the trailer before it. Returns the first commit whose trailer is not, or null.
-function verifyTrailers(all: Entry[], repoDir: string, branch: string): string | null {
+// Checks, oldest commit first, that each of this run's checkpoint commits on the branch names a hash of the record's
+// chain, later in the chain than the checkpoint before it; other runs' commits are left alone. Returns the first
+// commit that does not, or null.
+function verifyTrailers(p: RunPaths, all: Entry[], repoDir: string, branch: string): string | null {
   const position = new Map(all.map((entry, i) => [entry.chain, i]));
-  const log = execFileSync("git", ["log", "--reverse", "--format=%H %(trailers:key=Verify-Rules-Record,valueonly,separator=%x2C)", branch],
-    { cwd: repoDir, encoding: "utf8" });
+  const trailer = (key: string) => `%(trailers:key=${key},valueonly,separator=%x2C)`;
+  const log = execFileSync("git", ["log", "--reverse", `--format=%H%x1f${trailer("Verify-Rules-Run")}%x1f${trailer("Verify-Rules-Record")}`,
+    branch, "--"], { cwd: repoDir, encoding: "utf8" });
   let last = -1;
   for (const line of log.split("\n")) {
-    const [commit, value] = line.split(" ");
-    if (!value) continue;
+    const [commit, run, value] = line.split("\x1f");
+    if (run !== runName(p)) continue;
     const at = position.get(value);
     if (at === undefined) return `commit ${commit} names a record hash that is not in this record`;
     if (at <= last) return `commit ${commit} names a record hash no later in the chain than the checkpoint before it`;
