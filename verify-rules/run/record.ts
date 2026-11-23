@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { writeWhole, type RunPaths, type StepId } from "./state.ts";
+import { utcSeconds, writeWhole, type RunPaths, type StepId } from "./state.ts";
 
 const EMPTY_HEAD = "0".repeat(64);
 
@@ -30,7 +30,7 @@ export function chainHead(p: RunPaths): string {
 
 // Adds one entry and returns its chain hash: the SHA-256 of the previous hash followed by the entry's JSON.
 export function append(p: RunPaths, kind: string, fields: Record<string, unknown>, now = new Date()): string {
-  const entry = { ...fields, t: now.toISOString().replace(/\.\d+Z$/, "Z"), kind };
+  const entry = { ...fields, t: utcSeconds(now), kind };
   const chain = sha256(chainHead(p) + canonicalJson(entry));
   writeWhole(p.record, fs.readFileSync(p.record, "utf8") + canonicalJson({ ...entry, chain }) + "\n");
   return chain;

@@ -1,6 +1,6 @@
 // The status file the user can read at any time: the step, what is being done, the items passed, the spend
 // against each budget, the open items and what waits on the user; then the current step's items and the events.
-import { writeWhole, type ItemState, type RunPaths, type RunState } from "./state.ts";
+import { utcSeconds, writeWhole, type ItemState, type RunPaths, type RunState } from "./state.ts";
 
 const ITEM_STATES: readonly string[] = ["not started", "in progress", "done", "passed", "failed", "reopened"];
 const WAITING_ON_USER: readonly string[] = ["user-unanswered", "needs-user-only-fact"];
@@ -38,7 +38,7 @@ export function statusLines(s: RunState, now: Date, doing: string, unpaid: { che
     `- spend: ${spendLine(s)}`,
     `- checks still unpaid: ${unpaid.checks}, about ${usd(unpaid.usd, 4)}`,
     `- open items: ${openByCode(s)}`,
-    `- updated: ${now.toISOString().replace(/\.\d+Z$/, "Z")}`,
+    `- updated: ${utcSeconds(now)}`,
     `- waiting on you: ${waiting.length === 0 ? "nothing" : waiting.join(", ")}`,
     "",
     `## Items${s.step === null ? "" : ` of step ${s.step}`}`,

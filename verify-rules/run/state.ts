@@ -79,7 +79,7 @@ export function createRun(repoName: string, startedAt: Date, base: string, repoR
   if ((realPathOf(base) + path.sep).startsWith(repo + path.sep)) {
     throw new Error(`the run folder must be outside the repo: ${base} is inside ${repoRoot}`);
   }
-  const startTime = startedAt.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const startTime = utcSeconds(startedAt).replace(/[-:]/g, "");
   const p = pathsOf(path.join(base, `${repoName}-${startTime}`));
   fs.mkdirSync(base, { recursive: true });
   fs.mkdirSync(p.root);
@@ -93,6 +93,11 @@ export function openRun(root: string): RunPaths {
   const p = pathsOf(root);
   if (!fs.existsSync(p.state)) throw new Error(`not a run folder (it has no state file): ${root}`);
   return p;
+}
+
+// A time in UTC to the second, as every run file writes it: "2026-11-23T05:48:54Z".
+export function utcSeconds(time: Date): string {
+  return time.toISOString().replace(/\.\d+Z$/, "Z");
 }
 
 // Writes to <file>.partial, then renames it over the file, so a stop mid-write leaves the old file whole.
