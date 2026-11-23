@@ -15,6 +15,8 @@ export interface Rule {
 export interface RuleRef { claude: string; bold: string | null; key: string }
 
 type SkippedKind = "copied opening" | "global summary" | "system rules block";
+interface Unit { kind: SkippedKind; lines: string[] }      // a run of exact lines a CLAUDE.md skips
+interface Skips { global: Unit[]; lower: Unit[] }          // what the global CLAUDE.md skips, and what the others do
 
 export interface ReadResult {
   rules: Rule[]; skipped: { kind: SkippedKind; start: number; end: number }[];
@@ -114,25 +116,25 @@ function section(all: string[], heading: string): string[] {
   return all.slice(start, end);
 }
 
-function ruleNeverToChange(globalText: string): string[] {
-  const rule = readClaudeMd(GLOBAL, globalText, globalText).rules.find((r) => r.bold === NEVER_CHANGE);
-  return rule === undefined ? [] : rule.text.split("\n");
+// What each CLAUDE.md skips, worked out once from the global one. The global holds the originals: it skips its summary
+// and its System Rules block, and its rule never to change a CLAUDE.md is its own rule. Every other CLAUDE.md skips
+// its copies of the summary and of that rule (the copied opening), and its copy of the block.
+function skipsOf(globalText: string): Skips {
+  const all = lines(globalText);
+  const summary = section(all, SUMMARY_HEADING);
+  const block: Unit = { kind: "system rules block", lines: section(all, SYSTEM_RULES_HEADING) };
+  const withLines = (units: Unit[]) => units.filter((unit) => unit.lines.length > 0);
+  const global = withLines([{ kind: "global summary", lines: summary }, block]);
+  const neverChange = read(GLOBAL, globalText, global).rules.find((r) => r.bold === NEVER_CHANGE);
+  const copy = neverChange === undefined ? [] : neverChange.text.split("\n");
+  const lower = withLines([{ kind: "copied opening", lines: summary }, { kind: "copied opening", lines: copy }, block]);
+  return { global, lower };
 }
+
+const unitsFor = (claude: string, skips: Skips) => claude === GLOBAL ? skips.global : skips.lower;
 
 export function copiedOpening(globalText: string): string[] {
-  return [...section(lines(globalText), SUMMARY_HEADING), ...ruleNeverToChange(globalText)];
-}
-
-// The runs of exact lines a CLAUDE.md skips. The global one holds the originals: its summary is skipped, and its rule
-// never to change a CLAUDE.md is its own rule. Every other one skips its copies of both.
-function skippedUnits(claude: string, globalText: string): { kind: SkippedKind; lines: string[] }[] {
-  const global = lines(globalText);
-  const block = { kind: "system rules block" as const, lines: section(global, SYSTEM_RULES_HEADING) };
-  const units = claude === GLOBAL
-    ? [{ kind: "global summary" as const, lines: section(global, SUMMARY_HEADING) }, block]
-    : [{ kind: "copied opening" as const, lines: section(global, SUMMARY_HEADING) },
-      { kind: "copied opening" as const, lines: ruleNeverToChange(globalText) }, block];
-  return units.filter((unit) => unit.lines.length > 0);
+  return skipsOf(globalText).lower.filter((unit) => unit.kind === "copied opening").flatMap((unit) => unit.lines);
 }
 
 // A named rule's key is its CLAUDE.md and its bold sentence. An unnamed rule's is its CLAUDE.md and a hash of its text,
@@ -150,18 +152,39 @@ function subrules(rule: Rule): Rule["subrules"] {
     kind === "item" && k > 0 ? [{ bold: boldOf(ITEM.exec(textLines[k])!), line: rule.startLine + k }] : []);
 }
 
+// Records the unit skipped from line `start`. It joins the skipped span before it when that is of its kind and only
+// blank lines and headings lie between them (`between`). The global's own block is listed for a later version, and an
+// item in the global's summary is a problem.
+function recordSkip(result: ReadResult, claude: string, unit: Unit, start: number, between: string[]): void {
+  const end = start + unit.lines.length - 1;
+  const last = result.skipped.at(-1);
+  if (last?.kind === unit.kind && between.every((line) => isBlank(line) || headingLevel(line) !== null)) last.end = end;
+  else result.skipped.push({ kind: unit.kind, start, end });
+  if (unit.kind === "system rules block" && claude === GLOBAL) result.laterVersion.push({ kind: unit.kind, start, end });
+  if (unit.kind !== "global summary") return;
+  const problem = "an item in the global's summary is never read as a rule";
+  for (const [k, line] of unit.lines.entries()) {
+    if (ITEM.test(line)) result.problems.push({ line: start + k, text: line, problem });
+  }
+}
+
 function fileLine(value: RegExpExecArray, line: number): FileLine {
   if (value[1] !== undefined) return { kind: "path", path: value[1], line };
   return value[2] === "needed" ? { kind: "needed", line } : { kind: "whole-folder", line };
 }
 
+export function readClaudeMd(claude: string, text: string, globalText: string): ReadResult {
+  return read(claude, text, unitsFor(claude, skipsOf(globalText)));
+}
+
 // A rule is an item at the start of its line that no rule's text holds. Its text runs over blank lines to the next
 // rule at the same or a lower indent, the next heading, its file line, or a fence at its indent or lower; it holds
 // every fenced block opened in it. A file line ties its rule only straight after a line of the rule's text. A fenced
-// block outside every rule is stray, and one never closed is a problem.
-export function readClaudeMd(claude: string, text: string, globalText: string): ReadResult {
+// block outside every rule is stray, and one never closed is a problem. Each unit is skipped once, where its exact
+// lines start.
+function read(claude: string, text: string, skips: readonly Unit[]): ReadResult {
   const all = lines(text);
-  const units = skippedUnits(claude, globalText);
+  const units = [...skips];                // the units not yet found
   const result: ReadResult = { rules: [], skipped: [], stray: [], problems: [], laterVersion: [] };
   let rule: Rule | null = null;           // the rule whose text the next line may go on
   let fence: Fence | null = null;         // the open fenced block, in `rule` if that is open
@@ -186,17 +209,8 @@ export function readClaudeMd(claude: string, text: string, globalText: string): 
     const unit = units.find((u) => u.lines.every((unitLine, k) => all[i + k] === unitLine));
     if (unit !== undefined) {
       units.splice(units.indexOf(unit), 1);
-      const end = n + unit.lines.length - 1;
-      const last = result.skipped.at(-1);
-      const nextTo = last !== undefined && all.slice(last.end, i).every((l) => isBlank(l) || headingLevel(l) !== null);
-      if (nextTo && last.kind === unit.kind) last.end = end;
-      else result.skipped.push({ kind: unit.kind, start: n, end });
-      if (unit.kind === "system rules block" && claude === GLOBAL) result.laterVersion.push({ kind: unit.kind, start: n, end });
-      for (const [k, unitLine] of unit.lines.entries()) {
-        const problem = "an item in the global's summary is never read as a rule";
-        if (unit.kind === "global summary" && ITEM.test(unitLine)) result.problems.push({ line: n + k, text: unitLine, problem });
-      }
-      i = end - 1;
+      recordSkip(result, claude, unit, n, all.slice(result.skipped.at(-1)?.end ?? 0, i));
+      i += unit.lines.length - 1;
       rule = null;
       continue;
     }
@@ -237,7 +251,9 @@ export function readClaudeMd(claude: string, text: string, globalText: string): 
     } else result.stray.push({ line: n, text: line });
   }
 
-  if (fence !== null) result.problems.push({ line: fence.line, text: all[fence.line - 1], problem: "a fenced block is never closed" });
+  if (fence !== null) {
+    result.problems.push({ line: fence.line, text: all[fence.line - 1], problem: "a fenced block is never closed" });
+  }
 
   for (const [k, r] of result.rules.entries()) {
     r.text = all.slice(r.startLine - 1, r.endLine).join("\n");
@@ -250,7 +266,7 @@ export function readClaudeMd(claude: string, text: string, globalText: string): 
 
 // Every CLAUDE.md among the files (path from the repo root -> text), each read against the global one.
 export function readAll(files: ReadonlyMap<string, string>): Map<string, ReadResult> {
-  const globalText = files.get(GLOBAL) ?? "";
+  const skips = skipsOf(files.get(GLOBAL) ?? "");
   const claudes = [...files].filter(([file]) => path.posix.basename(file) === "CLAUDE.md");
-  return new Map(claudes.map(([file, text]) => [file, readClaudeMd(file, text, globalText)]));
+  return new Map(claudes.map(([file, text]) => [file, read(file, text, unitsFor(file, skips))]));
 }

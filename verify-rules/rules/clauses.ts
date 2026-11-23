@@ -33,13 +33,15 @@ const blank = (s: string) => s.replace(/[^\n]/g, " ");
 // A part of the text that is never cut: a fenced block or a table (each a run of lines), or a tag.
 interface Whole { kind: "fenced block" | "table" | "tag"; start: number; end: number }
 
-interface Reading { words: string; scan: string; subruleStarts: number[]; numbers: Span[]; keywords: Span[]; wholes: Whole[] }
+interface TextReading {
+  words: string; scan: string; subruleStarts: number[]; numbers: Span[]; keywords: Span[]; wholes: Whole[];
+}
 
 // The rule's text as the cut reads it, each the same length as the text. In `words`, list markers are blanked out,
 // so the rule's own list number and its sub-rules' numbers are not words. In `scan`, bold markers, fenced blocks
 // (as the rule reader finds them), table lines and tags are blanked out too, so none of them holds a number, a
 // keyword or a sentence end, and no cut falls inside a block, a table or a tag.
-function reading(text: string): Reading {
+function reading(text: string): TextReading {
   const words: string[] = [];
   const scan: string[] = [];
   const subruleStarts: number[] = [];
@@ -77,7 +79,7 @@ const within = (markers: Span[], [start, end]: Span) => markers.filter(([s]) => 
 // sentence that does not start in lower case, and not after an abbreviation ("etc." can end a sentence). The next
 // sentence starts at its first character, or at the start of its line when a line break lies between them. Each
 // sub-rule starts a sentence.
-function sentenceSpans(text: string, r: Reading): Span[] {
+function sentenceSpans(text: string, r: TextReading): Span[] {
   const cuts = new Set([0, ...r.subruleStarts, text.length]);
   for (const end of r.scan.matchAll(SENTENCE_END)) {
     if (/\p{Ll}/u.test(end[2]) || ABBREVIATION.test(r.scan.slice(0, end.index))) continue;
@@ -118,7 +120,7 @@ export function firstCut(text: string): Span[] {
   return clauses;
 }
 
-function floorOf(text: string, r: Reading): number {
+function floorOf(text: string, r: TextReading): number {
   return sentenceSpans(text, r)
     .reduce((sum, span) => sum + Math.max(1, within(r.numbers, span).length, within(r.keywords, span).length), 0);
 }
@@ -131,7 +133,7 @@ export function floor(text: string): number {
 const strictlyInside = (edge: number, [start, end]: Span) => start < edge && edge < end;
 
 // What a clause edge falls inside, if anything: a fenced block, a table, a tag, a number or a word.
-function insideOf(edge: number, text: string, r: Reading): string | null {
+function insideOf(edge: number, text: string, r: TextReading): string | null {
   const whole = r.wholes.find((w) => strictlyInside(edge, [w.start, w.end]));
   if (whole !== undefined) return whole.kind;
   if (r.numbers.some((number) => strictlyInside(edge, number))) return "number";

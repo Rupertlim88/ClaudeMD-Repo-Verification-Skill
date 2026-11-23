@@ -228,6 +228,8 @@ test("readAll reads every CLAUDE.md against the global one; two rules with the s
     ["b/CLAUDE.md", "## B\n\n3. **Rule in b.**\n"], ["a/x.py", "x = 1\n"],
   ]));
   assert.deepEqual([...all.keys()], ["CLAUDE.md", "part/CLAUDE.md", "a/CLAUDE.md", "b/CLAUDE.md"]);
+  assert.deepEqual([all.get("CLAUDE.md"), all.get("part/CLAUDE.md")],
+    [readClaudeMd("CLAUDE.md", GLOBAL, GLOBAL), readClaudeMd("part/CLAUDE.md", LOWER, GLOBAL)]);
   assert.deepEqual(all.get("part/CLAUDE.md")!.skipped.map((s) => s.kind), ["copied opening"]);
   const threes = [...all.values()].flatMap((r) => r.rules).filter((r) => r.number === 3);
   assert.deepEqual(threes.map((r) => r.key), ["CLAUDE.md::Test first, always.", "a/CLAUDE.md::Rule in a.", "b/CLAUDE.md::Rule in b."]);
