@@ -60,7 +60,7 @@ test("references: import, relative from-import read from the file's folder, impo
     'subprocess.run([sys.executable, "-m", "tools.run"])', 'exec(open("tests/helper.py").read())', 'sys.path.insert(0, "tests")', "",
   ].join("\n"), "pkg/sub/a.py").references.map((r) => [r.kind, r.target]), [
     ["import", "os"], ["import", "pkg.sub.b.f"], ["dynamic import", "tests.helper"], ["dynamic import", "x.y"],
-    ["module runner", "tools.run"], ["exec", "tests/helper.py"], ["import path", "tests"],
+    ["module runner", "tools.run"], ["exec", "tests/helper.py"], ["read", "tests/helper.py"], ["import path", "tests"],
   ]));
 
 test("references: shell commands, runpy, an imported import_module, a star import and a joined import path, with their lines; a dynamic import or module runner names only its first argument", () =>
@@ -76,6 +76,14 @@ test("references: shell commands, runpy, an imported import_module, a star impor
     { kind: "import", target: "importlib.import_module", line: 5 }, { kind: "dynamic import", target: "a.b", line: 6 },
     { kind: "import", target: "pkg", line: 7 }, { kind: "import path", target: "lib", line: 8 },
     { kind: "module runner", target: "tools.w", line: 9 }, { kind: "dynamic import", target: "x.y", line: 10 },
+  ]));
+
+test("references: a file opened, or named by a Path, is read", () =>
+  assert.deepEqual(facts([
+    'open("part/README.md").read()', 'io.open(os.path.join(HERE, "notes.txt"))', 'Path("data/a.csv").read_text()',
+    'pathlib.Path("b.json")', 'print("not a file")', "",
+  ].join("\n")).references.map((r) => [r.kind, r.target, r.line]), [
+    ["read", "part/README.md", 1], ["read", "notes.txt", 2], ["read", "data/a.csv", 3], ["read", "b.json", 4],
   ]));
 
 test("writes lists each piece's lines that write a file", () =>

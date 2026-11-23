@@ -124,7 +124,8 @@ def strings(nodes):
 
 
 def call_references(call):
-    """What one call names: a module it imports or runs, a file it execs or starts, or a folder it puts on the path."""
+    """What one call names: a module it imports or runs, a file it execs, starts or reads, or a folder it puts on the
+    path."""
     name = call_name(call.func)
     arguments = call.args + [keyword.value for keyword in call.keywords]
     if name in ("importlib.import_module", "import_module", "__import__"):
@@ -133,6 +134,8 @@ def call_references(call):
         return [("module runner", text) for text in strings(call.args[:1])]
     if name in ("exec", "runpy.run_path"):
         return [("exec", text) for text in strings(arguments)]
+    if name in ("open", "io.open", "Path", "pathlib.Path"):
+        return [("read", text) for text in strings(call.args[:1])]
     if name.startswith("sys.path."):
         return [("import path", text) for text in strings(arguments)]
     if name.startswith(SUBPROCESS):
@@ -143,8 +146,8 @@ def call_references(call):
 
 
 def references(path, tree):
-    """Everything the file imports, or names in a dynamic import, a module runner, an exec, a subprocess call or the
-    import path, in the order of its lines."""
+    """Everything the file imports, or names in a dynamic import, a module runner, an exec, a subprocess call, a file
+    it reads or the import path, in the order of its lines."""
     found = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

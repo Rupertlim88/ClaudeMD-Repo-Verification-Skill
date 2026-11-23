@@ -71,16 +71,22 @@ export function pythonLanguage(interpreter: string): Language {
   return {
     name: "Python",
     extensions: [".py"],
+    testRunnerConfig: ["conftest.py"],
     facts: (files) => new Map(Object.entries(runHelper(interpreter, "facts", files) as Record<string, FileFacts>)),
     mutations: (file, text, lines) => runHelper(interpreter, "mutations", { path: file, text, lines: [...lines] }) as Mutation[],
     assertions: (_file, text) => new Map(Object.entries(runHelper(interpreter, "assertions", { text }) as Record<string, string[]>)),
     testReadsSource: (_file, text, testName) => runHelper(interpreter, "reads_source", { text, test: testName }) as boolean,
 
+    // Each given file's test ids; with no paths, pytest's own discovery, and every file it collects tests from.
     async collectTests(root, paths) {
       const run = await pytest(interpreter, root, ["--collect-only", "-q", ...paths]);
       if (run.status !== 0 && run.status !== 5) throw new Error(`pytest could not collect the tests (exit ${run.status}):\n${run.output}`);
-      const ids = run.output.split("\n");
-      return new Map(paths.map((file) => [file, ids.filter((id) => id.startsWith(`${file}::`))]));
+      const tests = new Map(paths.map((file): [string, string[]] => [file, []]));
+      for (const id of run.output.split("\n").filter((line) => line.includes("::"))) {
+        const file = id.slice(0, id.indexOf("::"));
+        tests.set(file, [...tests.get(file) ?? [], id]);
+      }
+      return tests;
     },
 
     async runTest(root, testId, opts) {

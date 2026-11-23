@@ -9,7 +9,7 @@ export interface Piece {
 }
 
 export interface Reference {
-  kind: "import" | "dynamic import" | "module runner" | "exec" | "subprocess" | "import path"; target: string; line: number;
+  kind: "import" | "dynamic import" | "module runner" | "exec" | "subprocess" | "read" | "import path"; target: string; line: number;
 }
 
 // pieces is null for a file its language cannot parse. writes and names are keyed by piece id: the piece's lines
@@ -35,6 +35,7 @@ export interface RunTestOptions { timeoutMs: number; mutatedFile?: string; mutat
 export interface Language {
   readonly name: string;
   readonly extensions: readonly string[];
+  readonly testRunnerConfig: readonly string[];      // names of the files the test runner loads as settings for the tests below them
   facts(files: { path: string; text: string }[]): Map<string, FileFacts>;
   mutations(path: string, text: string, lines: ReadonlySet<number>): Mutation[];
   assertions(path: string, text: string): Map<string, string[]>;

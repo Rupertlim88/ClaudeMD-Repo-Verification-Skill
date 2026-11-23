@@ -4,13 +4,19 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { languageFor, type FileFacts, type Language } from "../code/language.ts";
+import { languageFor, type FileFacts, type Language, type Reference } from "../code/language.ts";
 import { readAll, type Rule, type RuleRef } from "./rule-reader.ts";
 
-export type ExemptGroup = "tests" | "docs" | "tool settings" | "CLAUDE.md files" | "empty package file";
+export const EXEMPT_GROUPS = ["tests", "docs", "tool settings", "CLAUDE.md files", "copied into .claude", "empty package file"] as const;
+export type ExemptGroup = (typeof EXEMPT_GROUPS)[number];
 export interface ExemptPattern { pattern: string; group: ExemptGroup; reason: string }
-export interface ExemptConfig { patterns: ExemptPattern[] }
-export interface RepoView { root: string; files: string[]; read(path: string): string; ignoredOnDisk: ReadonlySet<string> }
+// ownSkills: the skills under .claude/skills/ whose master copy is this repo, which are counted like any other code.
+export interface ExemptConfig { patterns: ExemptPattern[]; ownSkills: string[] }
+// collected: the files the test runner collects at least one test from; runnerConfig: the files it loads as settings.
+export interface RepoView {
+  root: string; files: string[]; read(path: string): string; ignoredOnDisk: ReadonlySet<string>;
+  collected: ReadonlySet<string>; runnerConfig: ReadonlySet<string>;
+}
 export interface Broken { file: string; problem: string; claude?: string; rule?: string }
 export interface TieReport {
   lowest: string[]; specific: RuleRef[]; general: { rule: RuleRef; mark: "whole-folder" | null }[];
@@ -26,10 +32,35 @@ const CODE = new Set([".py", ".pyw", ".ipynb", ".sh", ".bash", ".zsh", ".js", ".
   ".jsx", ".rb", ".pl", ".php", ".go", ".rs", ".java", ".kt", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".swift", ".r", ".jl",
   ".lua", ".ps1", ".bat"]);
 const HEADING_WRONG = "its heading does not state the bold sentence of the rule that names it";
+const USES: Record<Reference["kind"], string> = {
+  "import": "imports", "dynamic import": "imports", "module runner": "runs", "exec": "execs", "subprocess": "calls",
+  "read": "reads", "import path": "puts on the import path",
+};
+
+// The exempt list by default; a repo writes its own from its layout (tools: Exempt-list 12). The first pattern whose
+// group's content rule holds places a file.
+export const DEFAULT_EXEMPT: ExemptConfig = {
+  patterns: [
+    { pattern: "**/CLAUDE.md", group: "CLAUDE.md files", reason: "they hold the rules, which the hierarchy checks check" },
+    { pattern: ".claude/**", group: "copied into .claude", reason: "installed or copied from another repo" },
+    { pattern: "**/tests/**", group: "tests", reason: "a tests folder" },
+    { pattern: "**/test_*.py", group: "tests", reason: "a test file" },
+    { pattern: "**/*_test.py", group: "tests", reason: "a test file" },
+    { pattern: "**/conftest.py", group: "tests", reason: "the test runner's settings for the tests below it" },
+    { pattern: "**/docs/**", group: "docs", reason: "the docs" },
+    { pattern: "**/README.md", group: "docs", reason: "a folder's overview" },
+    ...[".github/workflows/**", "**/package.json", "**/package-lock.json", "**/requirements.txt", "**/pyproject.toml",
+      "**/pytest.ini", "**/setup.cfg", "**/tox.ini", "**/tsconfig.json", "**/.gitignore", "**/.gitattributes"]
+      .map((pattern) => ({ pattern, group: "tool settings" as const, reason: "read by a tool, not by the repo's own code" })),
+    { pattern: "**/__init__.py", group: "empty package file", reason: "it lets other code use the folder's code" },
+  ],
+  ownSkills: [],
+};
 
 const folderOf = (file: string) => (path.posix.dirname(file) === "." ? "" : path.posix.dirname(file));
 const inside = (file: string, folder: string) => (folder === "" ? !file.startsWith("../") : file.startsWith(`${folder}/`));
 const isCode = (file: string, text: string) => CODE.has(path.posix.extname(file)) || text.startsWith("#!");
+const inDocsFolder = (file: string) => folderOf(file).split("/").includes("docs");
 const cannotCarryHeading = (file: string, text: string) => path.posix.extname(file) === ".json" || text.includes("\0");
 const ref = (rule: Rule): RuleRef => ({ claude: rule.claude, bold: rule.bold, key: rule.key });
 // A folder of data is named with a trailing "/"; its files start with this prefix ("" for the repo root's "./").
@@ -49,17 +80,6 @@ export function matchesPattern(file: string, pattern: string): boolean {
   };
   return match(file.split("/"), pattern.split("/"));
 }
-
-// Each group's content rule: why the group refuses a file its pattern matched, or null when the file belongs to it.
-const CONTENT: Record<ExemptGroup, (file: string, text: string, facts: FileFacts | undefined) => string | null> = {
-  "tests": (file, _text, facts) =>
-    folderOf(file).split("/").includes("tests") || facts?.definesTest ? null : "defines no test, outside a tests folder",
-  "docs": (file, text) => (isCode(file, text) ? "is a code file" : null),
-  "tool settings": () => null,
-  "CLAUDE.md files": () => null,
-  "empty package file": (_file, _text, facts) =>
-    facts?.emptyPackage ? null : "holds more than comments, a docstring and the names it passes on",
-};
 
 // The files Python may run to import a dotted name from the repo root: each module and package on its path.
 function moduleFiles(name: string): string[] {
@@ -147,26 +167,72 @@ export function tieCheck(repo: RepoView, config: ExemptConfig, languages: readon
   }
   report.ties = report.ties.filter((t) => named.get(t.file)!.length === 1);
 
+  // What each file's references name, and who names each file.
+  const namedBy = (file: string, reference: Reference) => [...new Set(["", folderOf(file)].flatMap((base) => {
+    if (["import", "dynamic import", "module runner"].includes(reference.kind)) return moduleFiles(reference.target).map((m) => path.posix.join(base, m));
+    const named = path.posix.join(base, reference.target);
+    return reference.kind === "import path" ? repo.files.filter((f) => inside(f, named)) : [named];
+  }))].filter((f) => known.has(f));
+  const users = new Map<string, Set<string>>();
+  for (const [file, fileFacts] of facts)
+    for (const reference of fileFacts.references) for (const target of namedBy(file, reference)) users.set(target, (users.get(target) ?? new Set()).add(file));
+
+  // Test files: what the test runner collects or loads as settings, then each file a tests pattern matches that only
+  // test files use, until no more are found.
+  const tests = new Set([...repo.collected, ...repo.runnerConfig]);
+  const testPatterns = config.patterns.filter((p) => p.group === "tests");
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const file of repo.files.filter((f) => !tests.has(f) && testPatterns.some((p) => matchesPattern(f, p.pattern)))) {
+      const by = [...users.get(file) ?? []];
+      if (by.length > 0 && by.every((user) => tests.has(user))) grew = Boolean(tests.add(file));
+    }
+  }
+  const claudeFolders = new Set(claudes.map(folderOf));
+  // Each group's content rule: why the group refuses a file its pattern matched, or null when the file belongs to it.
+  const content: Record<ExemptGroup, (file: string) => string | null> = {
+    "tests": (file) => (tests.has(file) ? null : "the test runner collects no test from it nor loads it as settings, and not only tests use it"),
+    "docs": (file) => (inDocsFolder(file) ? (isCode(file, repo.read(file)) ? "is a code file" : null)
+      : claudeFolders.has(folderOf(file)) ? null : "is an overview below a folder's top"),
+    "tool settings": () => null,
+    "CLAUDE.md files": () => null,
+    "copied into .claude": (file) => (config.ownSkills.some((skill) => inside(file, `.claude/skills/${skill}`)) ? "is this repo's own skill" : null),
+    "empty package file": (file) => (facts.get(file)?.emptyPackage ? null : "holds more than comments, a docstring and the names it passes on"),
+  };
+
   // The exempt list: the first pattern whose group's content rule holds places the file; any other file is counted.
-  const exempt = new Set<string>();
+  const groupOf = new Map<string, ExemptGroup>();
   for (const file of repo.files) {
     const refused: { file: string; group: ExemptGroup; why: string }[] = [];
     for (const { pattern, group, reason } of config.patterns.filter((p) => matchesPattern(file, p.pattern))) {
-      const why = CONTENT[group](file, repo.read(file), facts.get(file));
-      if (why !== null) refused.push({ file, group, why });
-      else {
+      const why = content[group](file);
+      if (why === null) {
         report.exempt.push({ file, group, pattern, reason });
-        exempt.add(file);
+        groupOf.set(file, group);
         break;
       }
+      if (!refused.some((x) => x.group === group)) refused.push({ file, group, why });
     }
-    if (!exempt.has(file)) report.refusedExempt.push(...refused);
+    if (!groupOf.has(file)) report.refusedExempt.push(...refused);
   }
+  const exempt = new Set(groupOf.keys());
+  for (const file of repo.files.filter((f) => inDocsFolder(f) && isCode(f, repo.read(f)))) broken(file, "is a code file inside a docs folder");
 
-  // Counted code may not import from a tests folder, nor a module that git ignores, which the check would not see.
-  for (const file of repo.files.filter((file) => !exempt.has(file))) {
-    for (const reference of facts.get(file)?.references.filter((r) => r.kind === "import") ?? []) {
-      if (reference.target.split(".").includes("tests")) broken(file, `imports ${reference.target} from a tests folder`);
+  // The import and call test: no counted file, nor any empty package file passing names on, may import, run, exec,
+  // call, read or put on the import path an exempt file; tool settings a tool or the code reads as settings aside, and
+  // the empty package files themselves, which exist to be imported. Nor may it import from a tests folder, or a module
+  // git ignores, which the check would not see.
+  for (const file of repo.files.filter((f) => !exempt.has(f) || groupOf.get(f) === "empty package file")) {
+    const reported = new Set<string>();
+    for (const reference of facts.get(file)?.references ?? []) {
+      const used = namedBy(file, reference).filter((target) => exempt.has(target) && groupOf.get(target) !== "empty package file"
+        && !(groupOf.get(target) === "tool settings" && ["subprocess", "read"].includes(reference.kind)));
+      for (const target of used.filter((target) => !reported.has(target))) {
+        reported.add(target);
+        broken(file, `${USES[reference.kind]} ${target}, which is exempt as ${groupOf.get(target)}`);
+      }
+      if (reference.kind !== "import") continue;
+      if (used.length === 0 && reference.target.split(".").includes("tests")) broken(file, `imports ${reference.target} from a tests folder`);
       for (const module of moduleFiles(reference.target).filter((module) => repo.ignoredOnDisk.has(module)))
         broken(file, `imports ${module}, which git ignores`);
     }
@@ -193,19 +259,29 @@ export function tieCheck(repo: RepoView, config: ExemptConfig, languages: readon
   return report;
 }
 
+export function exemptPerGroup(r: TieReport): Record<ExemptGroup, number> {
+  return Object.fromEntries(EXEMPT_GROUPS.map((group) => [group, r.exempt.filter((e) => e.group === group).length])) as Record<ExemptGroup, number>;
+}
+
 export function brokenLines(r: TieReport): string[] {
   return r.broken.map((b) => `${b.file}: ${b.problem}${b.rule === undefined ? "" : ` (${b.claude}: "${b.rule}")`}`).sort();
 }
 
-// The files git tracks, and the new ones it does not ignore, that exist on disk, each named whole; and the files on
-// disk that git ignores.
-export function gitRepoView(root: string): RepoView {
+// The files git tracks, and the new ones it does not ignore, that exist on disk, each named whole; the files on disk
+// that git ignores; the files each language's test runner collects tests from by its own discovery, and the settings
+// files it loads for them (a settings file, such as conftest.py, applies to the tests in its folder and below).
+export async function gitRepoView(root: string, languages: readonly Language[]): Promise<RepoView> {
   const listed = (...options: string[]) =>
     execFileSync("git", ["ls-files", "-z", ...options], { cwd: root, encoding: "utf8", maxBuffer: 1 << 30 }).split("\0").filter((f) => f !== "");
   const files = [...new Set(listed("--cached", "--others", "--exclude-standard"))]
     .filter((file) => fs.statSync(path.join(root, file), { throwIfNoEntry: false })?.isFile() === true).sort();
+  const collected = new Set<string>();
+  for (const language of languages.filter((l) => files.some((file) => languageFor(file, languages) === l)))
+    for (const [file, ids] of await language.collectTests(root, [])) if (ids.length > 0) collected.add(file);
+  const runnerConfig = files.filter((file) => languages.some((l) => l.testRunnerConfig.includes(path.posix.basename(file)))
+    && [...collected].some((test) => inside(test, folderOf(file))));
   return {
     root, files, read: (file) => fs.readFileSync(path.join(root, file), "utf8"),
-    ignoredOnDisk: new Set(listed("--others", "--ignored", "--exclude-standard")),
+    ignoredOnDisk: new Set(listed("--others", "--ignored", "--exclude-standard")), collected, runnerConfig: new Set(runnerConfig),
   };
 }

@@ -1,8 +1,10 @@
-// An in-memory repo for the tie check's tests: the given files (path from the repo root -> text), and the files on
-// disk that git ignores; with the fixtures of senior-thesis-research's tie check tests.
+// An in-memory repo for the tie check's tests: the given files (path from the repo root -> text); the files on disk
+// that git ignores; the files the test runner collects tests from, and those it loads as settings. With the fixtures
+// of senior-thesis-research's tie check tests.
 import type { ExemptConfig, RepoView } from "../../rules/tie-check.ts";
 
-export function memoryRepo(files: Record<string, string>, ignored: string[] = []): RepoView {
+export function memoryRepo(files: Record<string, string>,
+  { ignored = [], collected = [], runnerConfig = [] }: { ignored?: string[]; collected?: string[]; runnerConfig?: string[] } = {}): RepoView {
   return {
     root: "/memory",
     files: Object.keys(files).sort(),
@@ -11,6 +13,8 @@ export function memoryRepo(files: Record<string, string>, ignored: string[] = []
       return files[file];
     },
     ignoredOnDisk: new Set(ignored),
+    collected: new Set(collected),
+    runnerConfig: new Set(runnerConfig),
   };
 }
 
@@ -44,4 +48,5 @@ export const THESIS: ExemptConfig = {
     { pattern: "**/pytest.ini", group: "tool settings", reason: "the test settings" },
     { pattern: "**/__init__.py", group: "empty package file", reason: "it lets other code use the folder's code" },
   ],
+  ownSkills: [],
 };

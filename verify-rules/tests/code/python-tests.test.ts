@@ -164,6 +164,11 @@ test("collectTests lists collected test ids, and none from a test_ file with no 
   assert.deepEqual(await py.collectTests(root, ["tests/test_none.py"]), new Map([["tests/test_none.py", []]]));
 });
 
+test("collectTests with no paths lists every file that pytest's own discovery collects tests from", async () => {
+  const root = toyRepo({ "tests/test_g.py": "def test_g():\n    pass\n", "tests/helper.py": "def test_not_collected():\n    pass\n" });
+  assert.deepEqual(await py.collectTests(root, []), new Map([["tests/test_f.py", [ID]], ["tests/test_g.py", ["tests/test_g.py::test_g"]]]));
+});
+
 test("collectTests is an error, never an empty list, when the test runner cannot collect a file", async () =>
   assert.rejects(py.collectTests(toyRepo({ "tests/test_bad.py": "import missing_module\n" }), ["tests/test_f.py", "tests/test_bad.py"]),
     /missing_module/));

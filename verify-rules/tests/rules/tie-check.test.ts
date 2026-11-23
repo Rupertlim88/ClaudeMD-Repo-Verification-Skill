@@ -5,7 +5,8 @@ import { brokenLines, tieCheck, type TieReport } from "../../rules/tie-check.ts"
 import { GLOBAL, memoryRepo, OPENING, THESIS } from "../helpers/repo-view.ts";
 
 const py = pythonLanguage(process.env.VR_TEST_PYTHON ?? "python3");
-const check = (files: Record<string, string>) => tieCheck(memoryRepo({ "CLAUDE.md": GLOBAL, ...files }), THESIS, [py]);
+const check = (files: Record<string, string>, extra: Parameters<typeof memoryRepo>[1] = {}) =>
+  tieCheck(memoryRepo({ "CLAUDE.md": GLOBAL, ...files }, extra), THESIS, [py]);
 const fileProblems = (r: TieReport) => r.broken.map((b) => [b.file, b.problem]);
 const bolds = (refs: { bold: string | null }[]) => refs.map((ref) => ref.bold);
 const HEADING_WRONG = "its heading does not state the bold sentence of the rule that names it";
@@ -119,8 +120,9 @@ test("a stray non-blank line in a lowest-level CLAUDE.md is broken (the LodeSTAR
 test("a file whose type cannot carry a heading, outside a folder of data and not exempt, cannot be tied", () => {
   const r = check({
     "part/CLAUDE.md": OPENING + "- **Kept.**\n  *File:* `kept/`\n", "part/kept/RULE.md": "# Kept.\n", "part/kept/a.json": "{}",
-    "part/table.json": "{}", "part/picture.png": "\u0089PNG\r\n\u001a\n\u0000", "part/tests/fixture.json": "{}", "part/notes.txt": "Notes.\n",
-  });
+    "part/table.json": "{}", "part/picture.png": "\u0089PNG\r\n\u001a\n\u0000", "part/notes.txt": "Notes.\n",
+    "part/tests/fixture.json": "{}", "part/tests/test_f.py": 'open("part/tests/fixture.json")\n\n\ndef test_f():\n    pass\n',
+  }, { collected: ["part/tests/test_f.py"] });
   assert.deepEqual(r.cannotCarryHeading, ["part/picture.png", "part/table.json"]);
   assert.deepEqual(r.notYetTied.files, ["part/notes.txt", "part/picture.png", "part/table.json"]);
 });

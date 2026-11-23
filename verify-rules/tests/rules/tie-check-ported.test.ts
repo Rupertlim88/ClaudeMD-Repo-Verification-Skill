@@ -1,5 +1,7 @@
 // The 34 tests of senior-thesis-research's tests/test_claude_ties.py, ported with their names and fixtures. Every
 // fixture also holds a global CLAUDE.md, because the rule reader finds the copied opening by the global's exact text.
+// A test file is exempt only when the test runner collects a test from it (tools: Exempt-list 4), so the test files in
+// these fixtures hold a test, and each fixture says what pytest collects.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,11 +13,12 @@ import { git, tmpDir } from "../helpers/tmp.ts";
 
 const py = pythonLanguage(process.env.VR_TEST_PYTHON ?? "python3");
 
-const check = (files: Record<string, string>, ignored: string[] = []) =>
-  tieCheck(memoryRepo({ "CLAUDE.md": GLOBAL, ...files }, ignored), THESIS, [py]);
+const check = (files: Record<string, string>, extra: Parameters<typeof memoryRepo>[1] = {}) =>
+  tieCheck(memoryRepo({ "CLAUDE.md": GLOBAL, ...files }, extra), THESIS, [py]);
 const problems = (r: TieReport) => r.broken.map((b) => b.problem);
 const fileProblems = (r: TieReport) => r.broken.map((b) => [b.file, b.problem]);
 const bolds = (refs: { bold: string | null }[]) => refs.map((ref) => ref.bold);
+const TEST = "\n\ndef test_it():\n    pass\n";
 
 test("a rule names its file and the file states the rule", () => {
   const r = check({
@@ -151,9 +154,9 @@ test("a later section with a copied heading is read as its own", () => {
 
 test("tests, setup files and empty package files are not counted", () => {
   const r = check({
-    "part/CLAUDE.md": OPENING, "part/tests/test_x.py": "", "part/tests/helper.py": "", "part/__init__.py": '"""Overview."""\n',
-    "requirements.txt": "", "pytest.ini": "", ".gitignore": "",
-  });
+    "part/CLAUDE.md": OPENING, "part/tests/test_x.py": "from part.tests.helper import x" + TEST, "part/tests/helper.py": "x = 1\n",
+    "part/__init__.py": '"""Overview."""\n', "requirements.txt": "", "pytest.ini": "", ".gitignore": "",
+  }, { collected: ["part/tests/test_x.py"] });
   assert.deepEqual(r.notYetTied.files, []);
   assert.deepEqual(r.exempt.map((e) => [e.file, e.group]), [
     [".gitignore", "tool settings"], ["CLAUDE.md", "CLAUDE.md files"], ["part/CLAUDE.md", "CLAUDE.md files"],
@@ -173,14 +176,17 @@ test("a test file outside a tests folder must define a test", () => {
     "part/test_method.py": "class TestB:\n    def test_b(self):\n        pass\n",
     "part/test_async.py": "async def test_c():\n    pass\n",
     "part/test_no_test.py": "def helper():\n    pass\n",
-  });
+  }, { collected: ["part/test_function.py", "part/test_method.py", "part/test_async.py"] });
   assert.deepEqual(r.notYetTied.files, ["part/test_no_test.py"]);
-  assert.deepEqual(r.refusedExempt, [{ file: "part/test_no_test.py", group: "tests", why: "defines no test, outside a tests folder" }]);
+  assert.deepEqual(r.refusedExempt, [{ file: "part/test_no_test.py", group: "tests",
+    why: "the test runner collects no test from it nor loads it as settings, and not only tests use it" }]);
 });
 
 test("a conftest is a test helper only inside a tests folder", () =>
-  assert.deepEqual(check({ "part/CLAUDE.md": OPENING, "part/tests/conftest.py": "import os\n", "part/conftest.py": "import os\n" })
-    .notYetTied.files, ["part/conftest.py"]));
+  assert.deepEqual(check({
+    "part/CLAUDE.md": OPENING, "part/tests/conftest.py": "import os\n", "part/conftest.py": "import os\n", "part/tests/test_x.py": TEST,
+  }, { collected: ["part/tests/test_x.py"], runnerConfig: ["part/conftest.py", "part/tests/conftest.py"] }).notYetTied.files,
+  ["part/conftest.py"]));                     // the thesis's patterns place a conftest.py only inside a tests folder
 
 for (const [statement, name] of [
   ["from part.tests.helper import peaks", "part.tests.helper.peaks"],
@@ -192,8 +198,8 @@ for (const [statement, name] of [
   test(`code that imports from a tests folder is broken (${statement})`, () =>
     assert.deepEqual(fileProblems(check({
       "part/CLAUDE.md": OPENING, "part/dots.py": `"""Dots."""\n${statement}\n`,
-      "part/tests/test_dots.py": "from part.tests.helper import peaks\n", "part/score.py": "import contests\n",
-    })), [["part/dots.py", `imports ${name} from a tests folder`]]));
+      "part/tests/test_dots.py": "from part.tests.helper import peaks" + TEST, "part/score.py": "import contests\n",
+    }, { collected: ["part/tests/test_dots.py"] })), [["part/dots.py", `imports ${name} from a tests folder`]]));
 }
 
 for (const [statement, module] of [
@@ -203,8 +209,9 @@ for (const [statement, module] of [
 ]) {
   test(`code that imports a file git ignores is broken (${statement})`, () =>
     assert.deepEqual(fileProblems(check({
-      "part/CLAUDE.md": OPENING, "part/dots.py": `"""Dots."""\n${statement}\n`, "part/tests/test_dots.py": `${statement}\n`,
-    }, [module, "outputs/results.json"])), [["part/dots.py", `imports ${module}, which git ignores`]]));
+      "part/CLAUDE.md": OPENING, "part/dots.py": `"""Dots."""\n${statement}\n`, "part/tests/test_dots.py": statement + TEST,
+    }, { ignored: [module, "outputs/results.json"], collected: ["part/tests/test_dots.py"] })),
+    [["part/dots.py", `imports ${module}, which git ignores`]]));
 }
 
 test("a package file holding more than a docstring is counted", () =>
@@ -217,7 +224,7 @@ test("the docs are not counted", () =>
   assert.deepEqual(check({ "part/CLAUDE.md": OPENING, "docs/workflow.md": "# How we work\n" }).notYetTied.files, []));
 
 // The thesis fixture had no global CLAUDE.md, so these files had no CLAUDE.md and were not yet tied. Here the global
-// covers them and is not lowest-level, so they are counted and broken.
+// covers them and is not lowest-level, so they are counted and broken; and a docs folder holds no code file.
 test("code in the docs is counted", () => {
   const code = ["docs/a.py", "docs/b.sh", "docs/c.js", "docs/d.ts", "docs/e.ipynb"];
   const r = check({
@@ -225,13 +232,14 @@ test("code in the docs is counted", () => {
   });
   assert.deepEqual(r.counted, code);
   assert.deepEqual(r.refusedExempt.map((x) => [x.file, x.why]), code.map((f) => [f, "is a code file"]));
-  assert.deepEqual(fileProblems(r), code.map((f) => [f, "its nearest CLAUDE.md is not lowest-level"]));
+  assert.deepEqual(fileProblems(r), [...["docs/__init__.py", ...code].map((f) => [f, "is a code file inside a docs folder"]),
+    ...code.map((f) => [f, "its nearest CLAUDE.md is not lowest-level"])]);
 });
 
 test("a higher CLAUDE.md is not read for ties", () =>
   assert.deepEqual(check({ "CLAUDE.md": GLOBAL + "\n2. **Global.**\n  *File:* `nowhere.py`\n", "part/CLAUDE.md": OPENING }).broken, []));
 
-test("git lists names with spaces and accents whole", () => {
+test("git lists names with spaces and accents whole", async () => {
   const root = tmpDir("names");
   git(root, "init", "-q");
   fs.mkdirSync(path.join(root, "outputs"));
@@ -240,7 +248,7 @@ test("git lists names with spaces and accents whole", () => {
   fs.writeFileSync(path.join(root, "gone.py"), "");
   git(root, "add", "gone.py");
   fs.rmSync(path.join(root, "gone.py"));
-  const view = gitRepoView(root);
+  const view = await gitRepoView(root, [py]);
   assert.deepEqual(view.files, [".gitignore", "my code.py", "é.py"]);
   assert.deepEqual(view.ignoredOnDisk, new Set(["outputs/hidden é.py"]));
 });
