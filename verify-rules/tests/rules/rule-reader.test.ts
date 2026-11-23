@@ -307,3 +307,23 @@ test("a numbered line straight after a line of text is a sub-rule only if it is 
     "  2. then second.\n\n  5. Fifth, after a blank line.\n");
   assert.deepEqual(res.rules.map((x) => [x.bold, x.subrules.map((sub) => sub.line)]), [["Cap.", []], ["Steps.", [6, 7, 9]]]);
 });
+
+test("a bold sentence is trimmed, as both repos' checks read it", () => {
+  const rule = readSmall("## A\n\n- **Rule. ** Text.\n  - ** Sub. ** Its text.\n").rules[0];
+  assert.deepEqual([rule.bold, rule.key, rule.subrules], ["Rule.", "x/CLAUDE.md::Rule.", [{ bold: "Sub.", line: 4 }]]);
+});
+
+test("the copied opening's two parts are one skipped span only when nothing but blank lines and headings lies between", () => {
+  const res = readSmall("# L\n\n## What the CLAUDE.md files are\nSummary.\n\n## Own rules\n\n2. **Own rule.** Read as a rule.\n" +
+    "1. **Never change a CLAUDE.md unless the user directly asks you to.** Rest.\n");
+  assert.deepEqual(res.skipped, [{ kind: "copied opening", start: 3, end: 4 }, { kind: "copied opening", start: 9, end: 9 }]);
+  assert.deepEqual(res.rules.map((r) => [r.bold, r.startLine]), [["Own rule.", 8]]);
+});
+
+test("unnamed rules with the same text get distinct keys, the first as ruleKey gives it", () => {
+  const first = `x/CLAUDE.md::unnamed::${sha256("- the same words").slice(0, 12)}`;
+  assert.deepEqual(readSmall("## A\n\n- the same words\n\n## B\n\n- the same words\n- the same words\n").rules.map((r) => r.key),
+    [first, `${first}::2`, `${first}::3`]);
+  assert.equal(ruleKey("x/CLAUDE.md", null, "- the same words", 2), `${first}::2`);
+  assert.equal(ruleKey("x/CLAUDE.md", "Named.", "- **Named.**", 2), "x/CLAUDE.md::Named.");
+});

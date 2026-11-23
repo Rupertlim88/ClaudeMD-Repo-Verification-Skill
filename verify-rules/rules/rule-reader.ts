@@ -36,6 +36,7 @@ const FILE_VALUE = /^\s*\*File:\*\s*(?:`([^`]+)`|(the whole folder|needed))\s*$/
 const lines = (text: string) => text.replace(/\r\n/g, "\n").split("\n");
 const indentOf = (line: string) => line.length - line.trimStart().length;
 const isBlank = (line: string) => line.trim() === "";
+const boldOf = (item: RegExpExecArray) => item[2]?.trim() ?? null;     // an item's bold sentence, trimmed, or none
 
 // A fenced block opens at a line of three or more backticks or tildes, and closes at a line of the same character, at
 // least as long, with nothing after it. One opened in a rule's text also ends before the first non-blank line indented
@@ -131,16 +132,19 @@ function skippedUnits(claude: string, globalText: string): { kind: SkippedKind; 
   return units.filter((unit) => unit.lines.length > 0);
 }
 
-export function ruleKey(claude: string, bold: string | null, text: string): string {
+// A named rule's key is its CLAUDE.md and its bold sentence. An unnamed rule's is its CLAUDE.md and a hash of its text,
+// and, from the second unnamed rule with that text in that CLAUDE.md on, which one it is (`occurrence`, from 1).
+export function ruleKey(claude: string, bold: string | null, text: string, occurrence = 1): string {
   if (bold !== null) return `${claude}::${bold}`;
-  return `${claude}::unnamed::${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
+  const key = `${claude}::unnamed::${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
+  return occurrence === 1 ? key : `${key}::${occurrence}`;
 }
 
 // The items in a rule's text after its first line, outside its fenced blocks.
 function subrules(rule: Rule): Rule["subrules"] {
   const textLines = rule.text.split("\n");
   return ruleTextLines(rule.text).flatMap((kind, k) =>
-    kind === "item" && k > 0 ? [{ bold: ITEM.exec(textLines[k])![2] ?? null, line: rule.startLine + k }] : []);
+    kind === "item" && k > 0 ? [{ bold: boldOf(ITEM.exec(textLines[k])!), line: rule.startLine + k }] : []);
 }
 
 function fileLine(value: RegExpExecArray, line: number): FileLine {
@@ -181,7 +185,8 @@ export function readClaudeMd(claude: string, text: string, globalText: string): 
       units.splice(units.indexOf(unit), 1);
       const end = n + unit.lines.length - 1;
       const last = result.skipped.at(-1);
-      if (last?.kind === unit.kind) last.end = end;
+      const nextTo = last !== undefined && all.slice(last.end, i).every((l) => isBlank(l) || headingLevel(l) !== null);
+      if (nextTo && last.kind === unit.kind) last.end = end;
       else result.skipped.push({ kind: unit.kind, start: n, end });
       i = end - 1;
       rule = null;
@@ -217,7 +222,7 @@ export function readClaudeMd(claude: string, text: string, globalText: string): 
     if (fence !== null) result.stray.push({ line: n, text: line });
     else if (item !== null) {
       rule = {
-        claude, key: "", bold: item[2] ?? null, number: item[1] === undefined ? null : Number(item[1]), indent,
+        claude, key: "", bold: boldOf(item), number: item[1] === undefined ? null : Number(item[1]), indent,
         startLine: n, endLine: n, text: "", fileLine: null, category, subrules: [],
       };
       result.rules.push(rule);
@@ -226,9 +231,10 @@ export function readClaudeMd(claude: string, text: string, globalText: string): 
 
   if (fence !== null) result.problems.push({ line: fence.line, text: all[fence.line - 1], problem: "a fenced block is never closed" });
 
-  for (const r of result.rules) {
+  for (const [k, r] of result.rules.entries()) {
     r.text = all.slice(r.startLine - 1, r.endLine).join("\n");
-    r.key = ruleKey(claude, r.bold, r.text);
+    const twinsBefore = result.rules.slice(0, k).filter((o) => o.bold === null && o.text === r.text).length;
+    r.key = ruleKey(claude, r.bold, r.text, twinsBefore + 1);
     r.subrules = subrules(r);
   }
   return result;
