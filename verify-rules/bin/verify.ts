@@ -11,7 +11,7 @@ import { accountNames, askJev, QUESTIONS } from "../checks/jev.ts";
 import { pythonLanguage } from "../code/python.ts";
 import { clauseTable } from "../rules/clauses.ts";
 import { readAll } from "../rules/rule-reader.ts";
-import { brokenLines, DEFAULT_EXEMPT, gitRepoView, tieCheck, type RepoView } from "../rules/tie-check.ts";
+import { brokenLines, DEFAULT_EXEMPT, exemptPerGroup, gitRepoView, tieCheck, type RepoView } from "../rules/tie-check.ts";
 import { logQuestion, questions, recordAnswer } from "../run/question-log.ts";
 import { append, capture, entries, type Captured } from "../run/record.ts";
 import { createRun, isOneOf, openRun, readState, STEP_IDS, updateState, type RunPaths } from "../run/state.ts";
@@ -71,7 +71,8 @@ const git = (repo: string, ...args: string[]) => {
 
 function languagesFor(repo: string, a: Args) {
   const venv = path.join(repo, ".venv", "bin", "python");
-  return [pythonLanguage(one(a, "python") ?? (fs.existsSync(venv) ? venv : "python3"))];
+  const given = one(a, "python");
+  return [pythonLanguage(given === undefined ? (fs.existsSync(venv) ? venv : "python3") : given.includes("/") ? path.resolve(given) : given)];
 }
 
 async function tieReport(repo: string, a: Args) {
@@ -94,7 +95,8 @@ function tiesText(view: RepoView, report: Awaited<ReturnType<typeof tieReport>>[
     ...report.cannotCarryHeading.map((file) => `cannot carry a heading  ${file}`),
     `${report.broken.length} broken ties; ${needed.length} rules needing a file, ${unmarked.length} rules not yet marked, ` +
       `${report.notYetTied.files.length} files not yet tied`,
-    `(${report.ties.length} ties both ways, ${report.general.length} general rules, ${report.exempt.length} exempt files)`,
+    `(${report.ties.length} ties both ways, ${report.general.length} general rules; exempt: ` +
+      `${Object.entries(exemptPerGroup(report)).filter(([, n]) => n > 0).map(([group, n]) => `${group} ${n}`).join(", ") || "none"})`,
   ];
   return { text: lines.join("\n"), code: report.broken.length > 0 ? 1 : 0 };
 }

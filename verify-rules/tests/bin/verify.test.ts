@@ -10,8 +10,8 @@ import { makeRepo, tmpDir } from "../helpers/tmp.ts";
 
 const VERIFY = path.resolve(import.meta.dirname, "../../bin/verify.ts");
 
-function verify(args: string[], input = "") {
-  const r = spawnSync("node", [VERIFY, ...args], { encoding: "utf8", input, env: { ...process.env, AI_GATEWAY_API_KEY: "" } });
+function verify(args: string[], input = "", cwd = process.cwd()) {
+  const r = spawnSync("node", [VERIFY, ...args], { encoding: "utf8", input, cwd, env: { ...process.env, AI_GATEWAY_API_KEY: "" } });
   return { out: r.stdout, err: r.stderr, code: r.status };
 }
 
@@ -63,6 +63,17 @@ test("ties lists what is broken and not yet tied, and fails only on a broken tie
   const broken = verify(["ties", makeRepo({ ...TIED, "part/dots.py": '"""Dots!"""\n' })]);
   assert.equal(broken.code, 1);
   assert.match(broken.out, /^BROKEN {2}part\/dots\.py: its heading does not state/m);
+});
+
+test("ties counts the exempt files per group", () => {
+  assert.match(verify(["ties", makeRepo({ ...TIED, ".gitignore": "x\n" })]).out, /exempt: tool settings 1, CLAUDE\.md files 2\)/);
+});
+
+test("an interpreter given by a relative path is used from where verify was run", () => {
+  const here = tmpDir("python");
+  fs.symlinkSync(spawnSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim(), path.join(here, "py"));
+  const r = verify(["ties", makeRepo(TIED), "--python", "./py"], "", here);
+  assert.equal(r.code, 0, r.err);
 });
 
 test("with --run, an output is captured in the run folder and recorded", () => {
