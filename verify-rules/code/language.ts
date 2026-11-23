@@ -1,5 +1,6 @@
 // The language interface: what the tools read from a file in its own language (its heading, pieces, references,
-// writes and names), and the lookup of a file's language by its file type.
+// writes and names, its mutations and its tests' assertions), how its tests are collected and run, and the lookup of
+// a file's language by its file type.
 import path from "node:path";
 
 export interface Piece {
@@ -18,10 +19,28 @@ export interface FileFacts {
   writes: Record<string, string[]>; names: Record<string, string[]>; definesTest: boolean; emptyPackage: boolean;
 }
 
+export type MutationOp = "flip comparison" | "move literal" | "delete statement" | "swap name" | "swap string";
+
+// One single change from a fixed operator: what it changes (the element) and the whole mutated source, with its diff.
+export interface Mutation { op: MutationOp; line: number; what: string; element: string; source: string; diff: string; diffHash: string }
+
+export type TestOutcome = { kind: "pass"; seconds: number } | { kind: "assertion"; message: string; seconds: number }
+  | { kind: "exception-in-lines"; exception: string; file: string; line: number; seconds: number }
+  | { kind: "error"; detail: string; seconds: number };
+
+export interface RunTestOptions { timeoutMs: number; mutatedFile?: string; mutatedLines?: ReadonlySet<number> }
+
+// Tests are named as the test runner names them, from the repo root (tests/test_f.py::test_ok); a test's name inside
+// its file leaves out the file (test_ok, TestB::test_b).
 export interface Language {
   readonly name: string;
   readonly extensions: readonly string[];
   facts(files: { path: string; text: string }[]): Map<string, FileFacts>;
+  mutations(path: string, text: string, lines: ReadonlySet<number>): Mutation[];
+  assertions(path: string, text: string): Map<string, string[]>;
+  collectTests(root: string, paths: string[]): Promise<Map<string, string[]>>;
+  runTest(root: string, testId: string, opts: RunTestOptions): Promise<TestOutcome>;
+  testReadsSource(path: string, text: string, testName: string): boolean;
 }
 
 export function languageFor(file: string, languages: readonly Language[]): Language | null {
