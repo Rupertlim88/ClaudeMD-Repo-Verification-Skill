@@ -301,3 +301,9 @@ test("a fenced block at a rule's indent or the margin is in no rule: its lines a
   assert.deepEqual(res.stray.map((s) => s.line), [4, 5, 6, 8, 9, 10, 11]);
   assert.deepEqual(res.problems, []);
 });
+
+test("a numbered line straight after a line of text is a sub-rule only if it is numbered 1 or goes on a list", () => {
+  const res = readSmall("## A\n\n- **Cap.** The cap is set to\n  16. It is measured first.\n- **Steps.** Two:\n  1. First,\n" +
+    "  2. then second.\n\n  5. Fifth, after a blank line.\n");
+  assert.deepEqual(res.rules.map((x) => [x.bold, x.subrules.map((sub) => sub.line)]), [["Cap.", []], ["Steps.", [6, 7, 9]]]);
+});

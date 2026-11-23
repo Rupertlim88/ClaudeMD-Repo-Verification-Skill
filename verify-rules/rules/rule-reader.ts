@@ -56,24 +56,38 @@ function fenceLine(fence: Fence, line: string): "inside" | "closing" | "out" {
 }
 
 // How the reader reads each line of a rule's text: the rule's own item line or a sub-rule's ("item"), a line of a
-// fenced block, its fence lines included ("fence"), or any other line ("text").
+// fenced block, its fence lines included ("fence"), or any other line ("text"). A numbered line straight after a line
+// of text, with no bold sentence, numbered other than 1 and not at the indent of the sub-rule before it, is that text
+// hard-wrapped, such as "16. It is measured first." after "The cap is set to" (Markdown starts a list inside a
+// paragraph only at 1; a sub-rule numbered by its step opens with its bold sentence).
 export type RuleTextLine = "item" | "fence" | "text";
 
 export function ruleTextLines(text: string): RuleTextLine[] {
   const all = lines(text);
   const ruleIndent = indentOf(all[0]);
+  const kinds: RuleTextLine[] = ["item"];
   let fence: Fence | null = null;
-  return all.map((line, k): RuleTextLine => {
+  let listIndent: number | null = null;       // the indent of the last sub-rule
+  for (let k = 1; k < all.length; k++) {
+    const line = all[k];
     if (fence !== null) {
       const where = fenceLine(fence, line);
       if (where === "closing") fence = null;
-      if (where !== "out") return "fence";
+      if (where !== "out") {
+        kinds.push("fence");
+        continue;
+      }
       fence = null;
     }
-    if (k > 0) fence = openFence(line, k + 1, ruleIndent);
-    if (fence !== null) return "fence";
-    return k === 0 || ITEM.test(line) ? "item" : "text";
-  });
+    fence = openFence(line, k + 1, ruleIndent);
+    const item = ITEM.exec(line);
+    const hardWrapped = item !== null && item[1] !== undefined && item[2] === undefined && Number(item[1]) !== 1 &&
+      kinds[k - 1] !== "fence" && !isBlank(all[k - 1]) && indentOf(line) !== listIndent;
+    const kind = fence !== null ? "fence" : item !== null && !hardWrapped ? "item" : "text";
+    if (kind === "item") listIndent = indentOf(line);
+    kinds.push(kind);
+  }
+  return kinds;
 }
 
 function headingLevel(line: string): number | null {

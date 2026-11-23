@@ -172,3 +172,33 @@ test("a fenced block left open in a rule's text ends at the first line indented 
   const t = "1. **One.** It sends:\n   ```\n   GET /a\nIt never stops, each time.";
   assert.deepEqual(pieces(t, firstCut(t)), ["1. **One.** ", "It sends:\n   ```\n   GET /a\nIt never stops, ", "each time."]);
 });
+
+test("'only' or 'never' before a condition is one marker; any other run of keywords is a marker for each", () => {
+  assert.equal(floor("It runs before each step."), 2);
+  const t = "It runs only if every test passes.";
+  assert.deepEqual(pieces(t, firstCut(t)), ["It runs only if ", "every test passes."]);
+  assert.equal(floor("Always never only each."), 4);
+  assert.equal(floor("It stops only when asked, never until then."), 2);
+});
+
+test("a date or a version is one number, and the cut never falls inside it", () => {
+  const version = "Node 22.18.0 is pinned.";
+  assert.deepEqual(pieces(version, firstCut(version)), [version]);
+  assert.equal(floor("It was decided on 2026-11-23 by the user."), 1);
+  assert.equal(floor("It uses 5,000.5 steps and 0.96 of them."), 2);
+});
+
+test("a numbered line straight after a line of text is that text hard-wrapped, not a sub-rule", () => {
+  const wrap = "- **Cap.** The cap is set to\n  16. It is measured first.";
+  assert.deepEqual(pieces(wrap, sentences(wrap)), ["- **Cap.** ", "The cap is set to\n  16. ", "It is measured first."]);
+  const list = "- **Steps.** Two:\n  1. First,\n  2. then second.";
+  assert.deepEqual(pieces(list, sentences(list)), ["- **Steps.** ", "Two:\n", "  1. First,\n", "  2. then second."]);
+});
+
+test("a sentence ends after a closing bracket or quote, and after 'etc.' before a capital", () => {
+  const bracket = "It is fixed (see the plan.) It never moves.";
+  assert.deepEqual(pieces(bracket, sentences(bracket)), ["It is fixed (see the plan.) ", "It never moves."]);
+  assert.equal(sentences("It is \u201cfixed.\u201d It never moves.").length, 2);
+  assert.equal(sentences("Use A, B, etc. Then stop.").length, 2);
+  assert.equal(sentences("Use A, B, etc. and then stop.").length, 1);
+});

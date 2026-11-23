@@ -10,13 +10,20 @@ export interface ClauseCheck { ok: boolean; clauses: number; floor: number; prob
 
 type Span = [number, number];
 
-const KEYWORD = KEYWORDS.map((k) => k.replace(" ", "\\s+")).join("|");
-const KEYWORD_MARKER = new RegExp(`\\b(?:${KEYWORD})(?:\\s+(?:${KEYWORD}))*\\b`, "gi");   // "only after" is one marker
+// The keyword phrases that are one marker each: "only" or "never" before a condition, such as "only after" or "never
+// before" ("at most" and "at least" are keywords themselves). Any other run of keywords is a marker for each.
+const PHRASES = ["only", "never"].flatMap((first) =>
+  ["before", "after", "if", "unless", "when", "until"].map((condition) => `${first} ${condition}`));
+const MARKERS = [...PHRASES, ...KEYWORDS].map((marker) => marker.replace(" ", "\\s+")).join("|");
+const KEYWORD_MARKER = new RegExp(`\\b(?:${MARKERS})\\b`, "gi");
+// A number: a date (2026-11-23), a number with thousands commas (5,000.5), or digits with any points (0.96, 22.18.0).
 const NUMBER_WORDS = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve";
-const NUMBER = new RegExp(`\\b(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?\\b|\\b(?:${NUMBER_WORDS})\\b`, "gi");
+const NUMBER = new RegExp(
+  `\\b(?:\\d{4}-\\d{2}-\\d{2}|\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)*)\\b|\\b(?:${NUMBER_WORDS})\\b`, "gi");
 const WORD = /[\p{L}\p{N}]+/gu;
 const WORD_CHARACTER = /^[\p{L}\p{N}]$/u;
-const ABBREVIATION = /\b(?:e\.g|i\.e|et al|etc|vs|cf)$/i;
+const ABBREVIATION = /\b(?:e\.g|i\.e|et al|vs|cf)$/i;
+const SENTENCE_END = /[.?!][)\]"'’”]*(\s+)(?=(\S))/g;     // a stop, any closing brackets or quotes, the space after
 const LIST_MARKER = /^(\s*)([-*+]|\d+[.)])(?=\s)/;
 const TABLE_LINE = /^\s*\|/;
 const TAG = /\*\([^\n]*?\)\*/g;                      // such as *(NIST REC-API-3)*
@@ -66,16 +73,17 @@ function reading(text: string): Reading {
 
 const within = (markers: Span[], [start, end]: Span) => markers.filter(([s]) => s >= start && s < end);
 
-// A sentence ends at ".", "?" or "!" followed by space and a next sentence that does not start in lower case, and
-// not after an abbreviation. The next sentence starts at its first character, or at the start of its line when a line
-// break lies between them. Each sub-rule starts a sentence.
+// A sentence ends at ".", "?" or "!", with any closing brackets or quotes after it, followed by space and a next
+// sentence that does not start in lower case, and not after an abbreviation ("etc." can end a sentence). The next
+// sentence starts at its first character, or at the start of its line when a line break lies between them. Each
+// sub-rule starts a sentence.
 function sentenceSpans(text: string, r: Reading): Span[] {
   const cuts = new Set([0, ...r.subruleStarts, text.length]);
-  for (const end of r.scan.matchAll(/[.?!](\s+)(?=(\S))/g)) {
+  for (const end of r.scan.matchAll(SENTENCE_END)) {
     if (/\p{Ll}/u.test(end[2]) || ABBREVIATION.test(r.scan.slice(0, end.index))) continue;
-    const space = end[1];
-    const breakAt = space.lastIndexOf("\n");
-    cuts.add(end.index + 1 + (breakAt === -1 ? space.length : breakAt + 1));
+    const first = end.index + end[0].length;                       // the next sentence's first character
+    const lineStart = r.scan.lastIndexOf("\n", first - 1) + 1;
+    cuts.add(lineStart > end.index ? lineStart : first);
   }
   const sorted = [...cuts].sort((a, b) => a - b);
   return sorted.slice(1).map((end, k): Span => [sorted[k], end]).filter(([s, e]) => /[\p{L}\p{N}]/u.test(r.words.slice(s, e)));
