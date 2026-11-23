@@ -39,34 +39,62 @@ export function append(p: RunPaths, kind: string, fields: Record<string, unknown
   });
 }
 
-export function verifyChain(p: RunPaths): { ok: true; head: string; entries: number } | { ok: false; badLine: number } {
-  const all = entries(p);
+export type RecordCheck = { ok: true; head: string; entries: number } | { ok: false; problem: string };
+
+// The record's whole check: first the chain, then the checkpoint trailers on the branch against it.
+export function verifyRecord(p: RunPaths, repoDir: string, branch: string): RecordCheck {
+  const chain = verifyChain(p);
+  if ("problem" in chain) return { ok: false, problem: chain.problem };
+  const problem = verifyTrailers(chain.entries, repoDir, branch);
+  if (problem !== null) return { ok: false, problem };
+  return { ok: true, head: chain.entries.at(-1)?.chain ?? EMPTY_HEAD, entries: chain.entries.length };
+}
+
+type Entry = { chain: string; [field: string]: unknown };
+
+// Every entry, oldest first, if each line is a JSON object whose hash follows from the line before it; else the
+// first line that is not.
+function verifyChain(p: RunPaths): { entries: Entry[] } | { problem: string } {
+  const all: Entry[] = [];
   let head = EMPTY_HEAD;
-  for (const [i, { chain, ...entry }] of all.entries()) {
-    if (chain !== sha256(head + canonicalJson(entry))) return { ok: false, badLine: i + 1 };
-    head = String(chain);
+  for (const [i, line] of fs.readFileSync(p.record, "utf8").split("\n").filter((l) => l !== "").entries()) {
+    const entry = jsonObject(line);
+    if (entry === null) return { problem: `line ${i + 1} is not a JSON object` };
+    const { chain, ...rest } = entry;
+    if (chain !== sha256(head + canonicalJson(rest))) return { problem: `line ${i + 1} does not follow from the line before it` };
+    head = chain;
+    all.push(entry);
   }
-  return { ok: true, head, entries: all.length };
+  return { entries: all };
+}
+
+function jsonObject(line: string): Entry | null {
+  try {
+    const value = JSON.parse(line);
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 export function trailers(step: StepId, round: number, head: string): string[] {
   return [`Verify-Rules-Step: ${step}`, `Verify-Rules-Round: ${round}`, `Verify-Rules-Record: ${head}`];
 }
 
-// Checks, oldest commit first, that each Verify-Rules-Record trailer on the branch is a hash of this record's chain,
-// later in the chain than the trailer before it. Returns the commits whose trailer is not.
-export function verifyTrailers(p: RunPaths, repoDir: string, branch: string): { ok: boolean; mismatches: string[] } {
-  const position = new Map(entries(p).map((entry, i) => [String(entry.chain), i]));
+// Checks, oldest commit first, that each Verify-Rules-Record trailer on the branch is a hash of the record's chain,
+// later in the chain than the trailer before it. Returns the first commit whose trailer is not, or null.
+function verifyTrailers(all: Entry[], repoDir: string, branch: string): string | null {
+  const position = new Map(all.map((entry, i) => [entry.chain, i]));
   const log = execFileSync("git", ["log", "--reverse", "--format=%H %(trailers:key=Verify-Rules-Record,valueonly,separator=%x2C)", branch],
     { cwd: repoDir, encoding: "utf8" });
-  const mismatches: string[] = [];
   let last = -1;
   for (const line of log.split("\n")) {
     const [commit, value] = line.split(" ");
     if (!value) continue;
     const at = position.get(value);
-    if (at === undefined || at <= last) mismatches.push(commit);
-    else last = at;
+    if (at === undefined) return `commit ${commit} names a record hash that is not in this record`;
+    if (at <= last) return `commit ${commit} names a record hash no later in the chain than the checkpoint before it`;
+    last = at;
   }
-  return { ok: mismatches.length === 0, mismatches };
+  return null;
 }

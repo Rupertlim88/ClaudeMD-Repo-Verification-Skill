@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { test } from "node:test";
-import { append, canonicalJson, chainHead, trailers, verifyChain, verifyTrailers } from "../../run/record.ts";
-import { createRun } from "../../run/state.ts";
+import { append, canonicalJson, chainHead, trailers, verifyRecord } from "../../run/record.ts";
+import { createRun, type RunPaths } from "../../run/state.ts";
 import { atOnce } from "../helpers/at-once.ts";
 import { git, makeRepo, tmpDir } from "../helpers/tmp.ts";
 
@@ -11,7 +11,13 @@ const t0 = new Date("2026-11-23T05:48:54Z");
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 function newRun() {
-  return createRun("r", t0, tmpDir("runs"), makeRepo({ "a.py": "x = 1\n" }));
+  const repo = makeRepo({ "a.py": "x = 1\n" });
+  return { p: createRun("r", t0, tmpDir("runs"), repo), repo };
+}
+
+function editRecord(p: RunPaths, edit: (lines: string[]) => string[]): void {
+  const lines = fs.readFileSync(p.record, "utf8").split("\n").filter((line) => line !== "");
+  fs.writeFileSync(p.record, edit(lines).map((line) => line + "\n").join(""));
 }
 
 function checkpointCommit(repo: string, lines: string[]): string {
@@ -20,7 +26,7 @@ function checkpointCommit(repo: string, lines: string[]): string {
 }
 
 test("each entry carries the SHA-256 of the previous hash and its own sorted JSON", () => {
-  const p = newRun();
+  const { p } = newRun();
   const h1 = append(p, "start", { a: 1 }, t0);
   const h2 = append(p, "verdict", { b: 2 }, t0);
   assert.equal(h1, sha256("0".repeat(64) + '{"a":1,"kind":"start","t":"2026-11-23T05:48:54Z"}'));
@@ -28,7 +34,7 @@ test("each entry carries the SHA-256 of the previous hash and its own sorted JSO
 });
 
 test("chainHead is 64 zeros for an empty record, then the last entry's hash", () => {
-  const p = newRun();
+  const { p } = newRun();
   assert.equal(chainHead(p), "0".repeat(64));
   append(p, "start", {}, t0);
   const h2 = append(p, "verdict", { b: 2 }, t0);
@@ -36,76 +42,92 @@ test("chainHead is 64 zeros for an empty record, then the last entry's hash", ()
 });
 
 test("a field cannot replace an entry's time or kind", () => {
-  const p = newRun();
+  const { p } = newRun();
   const h = append(p, "verdict", { t: "1999-01-01T00:00:00Z", kind: "approval" }, t0);
   assert.equal(h, sha256("0".repeat(64) + '{"kind":"verdict","t":"2026-11-23T05:48:54Z"}'));
 });
 
 test("four processes appending at once lose no entry, and the chain verifies", async () => {
-  const p = newRun();
+  const { p, repo } = newRun();
   const writers = ["1", "2", "3", "4"];
   const ends = await atOnce(writers.map((writer) => ["append", p.root, writer, "50"]));
   assert.deepEqual(ends, writers.map(() => ({ code: 0, stderr: "" })));
   const written = fs.readFileSync(p.record, "utf8").split("\n").filter((line) => line !== "").map((line) => JSON.parse(line));
   const every = writers.flatMap((writer) => Array.from({ length: 50 }, (_, i) => `${writer}.${i}`));
   assert.deepEqual(written.map((e) => `${e.writer}.${e.i}`).sort(), every.sort());
-  assert.equal(verifyChain(p).ok, true);
+  assert.equal(verifyRecord(p, repo, "main").ok, true);
 });
 
-test("verifyChain passes an untouched record, with its head and its number of entries", () => {
-  const p = newRun();
+test("verifyRecord passes an untouched record, with its head and its number of entries", () => {
+  const { p, repo } = newRun();
   append(p, "start", { a: 1 }, t0);
   const h2 = append(p, "verdict", { b: 2 }, t0);
-  assert.deepEqual(verifyChain(p), { ok: true, head: h2, entries: 2 });
+  assert.deepEqual(verifyRecord(p, repo, "main"), { ok: true, head: h2, entries: 2 });
 });
 
-test("verifyChain finds an edited entry by its line", () => {
-  const p = newRun();
+test("verifyRecord names an edited entry by its line", () => {
+  const { p, repo } = newRun();
   append(p, "start", { a: 1 }, t0);
   append(p, "verdict", { b: 2 }, t0);
   append(p, "verdict", { c: 3 }, t0);
-  const lines = fs.readFileSync(p.record, "utf8").split("\n");
-  lines[1] = lines[1].replace('"b":2', '"b":3');
-  fs.writeFileSync(p.record, lines.join("\n"));
-  assert.deepEqual(verifyChain(p), { ok: false, badLine: 2 });
+  editRecord(p, (lines) => lines.map((line, i) => (i === 1 ? line.replace('"b":2', '"b":3') : line)));
+  assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 does not follow from the line before it" });
 });
 
-test("verifyChain finds a deleted entry at the line after it", () => {
-  const p = newRun();
+test("verifyRecord names a deleted entry at the line after it", () => {
+  const { p, repo } = newRun();
   append(p, "start", { a: 1 }, t0);
   append(p, "verdict", { b: 2 }, t0);
   append(p, "verdict", { c: 3 }, t0);
-  const lines = fs.readFileSync(p.record, "utf8").split("\n");
-  fs.writeFileSync(p.record, [lines[0], lines[2], ""].join("\n"));
-  assert.deepEqual(verifyChain(p), { ok: false, badLine: 2 });
+  editRecord(p, (lines) => [lines[0], lines[2]]);
+  assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 does not follow from the line before it" });
+});
+
+test("verifyRecord names a line that is not a JSON object, rather than throwing", () => {
+  const { p, repo } = newRun();
+  append(p, "start", { a: 1 }, t0);
+  append(p, "verdict", { b: 2 }, t0);
+  for (const bad of ['{"b":2,', "null"]) {
+    editRecord(p, (lines) => [lines[0], bad]);
+    assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 is not a JSON object" }, bad);
+  }
+});
+
+test("verifyRecord fails an edited entry even when every trailer still names a hash in the record", () => {
+  const { p, repo } = newRun();
+  append(p, "start", {}, t0);
+  const h2 = append(p, "verdict", { item: "7.c1", verdict: "FAIL" }, t0);
+  checkpointCommit(repo, trailers("7", 1, h2));
+  editRecord(p, (lines) => lines.map((line) => line.replace('"FAIL"', '"PASS"')));
+  assert.deepEqual(verifyRecord(p, repo, "main"), { ok: false, problem: "line 2 does not follow from the line before it" });
 });
 
 test("trailers name the step, the round and the record's hash", () =>
   assert.deepEqual(trailers("7", 2, "ab".repeat(32)),
     ["Verify-Rules-Step: 7", "Verify-Rules-Round: 2", `Verify-Rules-Record: ${"ab".repeat(32)}`]));
 
-test("verifyTrailers passes when every trailer is a chain hash in order, and names a commit whose trailer is not", () => {
-  const p = newRun();
-  const repo = makeRepo({ "a.py": "x = 1\n" });
+test("verifyRecord passes when every trailer is a chain hash in order, and names a commit whose trailer is not", () => {
+  const { p, repo } = newRun();
   const h1 = append(p, "start", {}, t0);
   append(p, "verdict", { b: 2 }, t0);
   const h3 = append(p, "verdict", { c: 3 }, t0);
   checkpointCommit(repo, trailers("0", 1, h1));
   checkpointCommit(repo, trailers("7", 1, h3));
-  assert.deepEqual(verifyTrailers(p, repo, "main"), { ok: true, mismatches: [] });
+  assert.equal(verifyRecord(p, repo, "main").ok, true);
 
   const unknown = checkpointCommit(repo, trailers("8", 1, "f".repeat(64)));
-  assert.deepEqual(verifyTrailers(p, repo, "main"), { ok: false, mismatches: [unknown] });
+  assert.deepEqual(verifyRecord(p, repo, "main"),
+    { ok: false, problem: `commit ${unknown} names a record hash that is not in this record` });
 });
 
-test("verifyTrailers names a commit whose trailer goes back in the chain", () => {
-  const p = newRun();
-  const repo = makeRepo({ "a.py": "x = 1\n" });
+test("verifyRecord names a commit whose trailer goes back in the chain", () => {
+  const { p, repo } = newRun();
   const h1 = append(p, "start", {}, t0);
   const h2 = append(p, "verdict", { b: 2 }, t0);
   checkpointCommit(repo, trailers("0", 1, h2));
   const back = checkpointCommit(repo, trailers("7", 1, h1));
-  assert.deepEqual(verifyTrailers(p, repo, "main"), { ok: false, mismatches: [back] });
+  assert.deepEqual(verifyRecord(p, repo, "main"),
+    { ok: false, problem: `commit ${back} names a record hash no later in the chain than the checkpoint before it` });
 });
 
 test("canonicalJson sorts keys at every depth, and keeps the order of lists", () =>
