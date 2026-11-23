@@ -18,11 +18,30 @@ function newRun() {
   return createRun("r", new Date("2026-11-23T05:48:54Z"), tmpDir("runs"), makeRepo({ "a.py": "x = 1\n" }));
 }
 
-test("createRun names the folder after the repo and the start time, and makes every file", () => {
+test("createRun names the folder after the repo and the start time, and makes every file and folder", () => {
   const p = createRun("senior-thesis-research", new Date("2026-11-23T05:48:54Z"), tmpDir("runs"),
     makeRepo({ "a.py": "x = 1\n" }));
   assert.equal(path.basename(p.root), "senior-thesis-research-20261123T054854Z");
-  for (const f of [p.state, p.record, p.questions, p.status]) assert.ok(fs.existsSync(f), f);
+  for (const f of [p.state, p.record, p.questions, p.status]) assert.ok(fs.statSync(f).isFile(), f);
+  for (const d of [p.tables, p.jev, p.checkers, p.packs, p.evidence]) assert.ok(fs.statSync(d).isDirectory(), d);
+});
+
+test("createRun refuses a run folder that already exists, and leaves that run as it was", () => {
+  const base = tmpDir("runs");
+  const repo = makeRepo({ "a.py": "x\n" });
+  const startedAt = new Date("2026-11-23T05:48:54Z");
+  const p = createRun("r", startedAt, base, repo);
+  fs.writeFileSync(p.record, "the first run's record\n");
+  assert.throws(() => createRun("r", startedAt, base, repo),
+    (e: NodeJS.ErrnoException) => e.code === "EEXIST" && e.path === p.root);
+  assert.equal(fs.readFileSync(p.record, "utf8"), "the first run's record\n");
+});
+
+test("createRun allows a folder beside the repo whose name starts with the repo's name", () => {
+  const repo = makeRepo({ "a.py": "x\n" });
+  const beside = `${repo}-runs`;
+  assert.equal(path.dirname(createRun("r", new Date(), beside, repo).root), beside);
+  fs.rmSync(beside, { recursive: true });
 });
 
 test("a new run's state reads back with nothing done and nothing spent", () => {
@@ -50,6 +69,15 @@ test("openRun finds the files of an existing run, and refuses a folder that is n
   const p = newRun();
   assert.deepEqual(openRun(p.root), p);
   assert.throws(() => openRun(tmpDir("empty")), /not a run folder/);
+});
+
+test("writeWhole puts a new file in place of the old one, never writing into the old one", () => {
+  const f = path.join(tmpDir("whole"), "state.json");
+  fs.writeFileSync(f, "old");
+  fs.linkSync(f, `${f}.before`);
+  writeWhole(f, "new");
+  assert.equal(fs.readFileSync(f, "utf8"), "new");
+  assert.equal(fs.readFileSync(`${f}.before`, "utf8"), "old");
 });
 
 test("writeWhole leaves no partial file, and a stale partial file never replaces the state", () => {
