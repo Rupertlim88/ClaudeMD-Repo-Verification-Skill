@@ -3,7 +3,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export type StepId = "0" | "7" | "tie" | "8" | "9" | "14";
+// The steps version 1 runs, in order.
+export const STEP_IDS = ["0", "7", "tie", "8", "9", "14"] as const;
+export type StepId = (typeof STEP_IDS)[number];
 
 export interface RunPaths {
   root: string; state: string; record: string; questions: string; status: string; lock: string;
@@ -22,12 +24,18 @@ export interface ItemState {
   answers: (Answer & { entry: string })[];
 }
 
+export const FINDING_LABELS = ["measured", "inferred"] as const;
+export const FINDING_KINDS = ["gap to implement", "gap to check", "not testable here", "extra piece", "another rule's job",
+  "broken tie", "classification", "known failure", "other"] as const;
+export const FINDING_GROUPS = ["A", "B1", "B2", "C"] as const;
+
 export interface Finding {
-  id: string; where: string; what: string; label: "measured" | "inferred";
-  kind: "gap to implement" | "gap to check" | "not testable here" | "extra piece" | "another rule's job" |
-    "broken tie" | "classification" | "known failure" | "other";
-  group: "A" | "B1" | "B2" | "C" | null; source: string;
+  id: string; where: string; what: string; label: (typeof FINDING_LABELS)[number]; kind: (typeof FINDING_KINDS)[number];
+  group: (typeof FINDING_GROUPS)[number] | null; source: string;
 }
+
+export const SITUATIONS = ["A", "B", "C", "D"] as const;
+export const STEP_RESULTS = ["passed", "failed", "failed, continued by user", "not run"] as const;
 
 export interface RunState {
   repo: string; scope: string; startCommit: string; baseline: string; baselineHow: string;
@@ -41,8 +49,8 @@ export interface RunState {
   open: OpenItem[]; declined: DeclinedItem[];
   agents: { id: string; folder: string; started: string; reported: boolean; note: string }[];
   mistakes: Record<string, number>;
-  situation: { guess: "A" | "B" | "C" | "D"; counts: Record<string, number> } | null;
-  steps: Partial<Record<StepId, { result: "passed" | "failed" | "failed, continued by user" | "not run"; rounds: number }>>;
+  situation: { guess: (typeof SITUATIONS)[number]; counts: Record<string, number> } | null;
+  steps: Partial<Record<StepId, { result: (typeof STEP_RESULTS)[number]; rounds: number }>>;
 }
 
 export interface RunView { paths: RunPaths; state: RunState; copyRoot: string; table<T>(name: string): T | null }
