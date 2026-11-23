@@ -7,8 +7,8 @@ import { git, makeRepo } from "../helpers/tmp.ts";
 
 function question(over: Partial<LoggedQuestion>): LoggedQuestion {
   return {
-    id: "q1", kind: "b", topic: "budgets", text: "What may this run spend?", recommendation: "$5",
-    askedAt: "2026-11-23T06:00:00Z", answer: null, answerMessageId: null, answeredAt: null, idNote: null, report: null,
+    id: "q1", kind: "b", topic: "budgets", text: "What may this run spend?", recommendation: "$5", items: [],
+    askedAt: "2026-11-23T06:00:00Z", askedMessageId: null, answer: null, answerMessageId: null, answeredAt: null, idNote: null, report: null,
     ...over,
   };
 }

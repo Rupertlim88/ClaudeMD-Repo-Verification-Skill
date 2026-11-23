@@ -20,7 +20,7 @@ const EVIDENCE_KINDS = ["answer", "verdict"] as const;
 // A captured output: a file in the run folder, named from the run folder, with the SHA-256 of its bytes.
 export interface Captured { file: string; sha256: string }
 
-type Entry = { kind: string; chain: string; [field: string]: unknown };
+export type Entry = { kind: string; chain: string; [field: string]: unknown };
 
 // JSON with the keys of every object sorted, so the same entry always gives the same text.
 export function canonicalJson(v: unknown): string {
@@ -115,6 +115,13 @@ export function verifyRecord(p: RunPaths, repoDir: string, branch: string): Reco
   const problem = verifyTrailers(p, checked.entries, repoDir, branch);
   if (problem !== null) return { ok: false, problem };
   return { ok: true, head: checked.entries.at(-1)?.chain ?? EMPTY_HEAD, entries: checked.entries.length };
+}
+
+// Every entry of the record, oldest first; a broken chain is refused.
+export function entries(p: RunPaths): Entry[] {
+  const chain = verifyChain(p);
+  if ("problem" in chain) throw new Error(`the record is broken: ${chain.problem}`);
+  return chain.entries;
 }
 
 // Every entry, oldest first, if the chain holds and every captured output still has its hash; else the first problem.
