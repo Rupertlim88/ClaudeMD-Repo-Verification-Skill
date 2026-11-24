@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { entries } from "../../run/record.ts";
 import { openRun, readState } from "../../run/state.ts";
 import { GLOBAL, OPENING } from "../helpers/repo-view.ts";
-import { makeRepo, tmpDir } from "../helpers/tmp.ts";
+import { git, makeRepo, tmpDir } from "../helpers/tmp.ts";
 
 const VERIFY = path.resolve(import.meta.dirname, "../../bin/verify.ts");
 
@@ -40,6 +40,7 @@ test("start makes the run folder outside the repo, finds the situation, and says
   assert.match(r.out, /verify\.ts budget/);
   assert.match(r.out, /--kind b --topic budgets/);
   assert.match(r.out, /--compute-hours <hours>/);
+  assert.match(r.out, /worktree --run "\$RUN"/);
   assert.match(fs.readFileSync(path.join(r.run, "status.md"), "utf8"), /step 0, round 1/);
 });
 
@@ -184,6 +185,7 @@ test("start records the baseline: the start commit, and how it was chosen", () =
 
 test("capture --test records the test command, its exit and its output file in the state", () => {
   const r = start(TIED);
+  verify(["worktree", "--run", r.run]);
   const c = verify(["capture", "--run", r.run, "--name", "tests", "--test", "--", "sh", "-c", "echo 3 passed; exit 0"]);
   assert.equal(c.code, 0, c.err);
   const s = readState(openRun(r.run));
@@ -191,4 +193,25 @@ test("capture --test records the test command, its exit and its output file in t
   const plain = verify(["capture", "--run", r.run, "--name", "other", "--", "true"]);
   assert.equal(plain.code, 0, plain.err);
   assert.equal(readState(openRun(r.run)).testCommands.length, 1);
+});
+
+test("worktree makes the run's branch and worktree from the start commit, records them, and captures then run there", () => {
+  const r = start(TIED);
+  const early = verify(["capture", "--run", r.run, "--name", "tests", "--test", "--", "python3", "-c", "print(1)"]);
+  assert.notEqual(early.code, 0);
+  assert.match(early.err, /worktree/);
+  const made = verify(["worktree", "--run", r.run]);
+  assert.equal(made.code, 0, made.err);
+  const s = readState(openRun(r.run));
+  assert.equal(s.worktree, path.join(fs.realpathSync(r.run), "worktree"));
+  assert.match(s.runBranch ?? "", /^verify-rules\/run-\d{8}T\d{6}Z$/);
+  assert.equal(git(s.worktree!, "rev-parse", "HEAD").trim(), s.startCommit);
+  assert.equal(git(s.worktree!, "branch", "--show-current").trim(), s.runBranch);
+  const out = verify(["capture", "--run", r.run, "--name", "tests", "--test", "--", "python3", "-c", "import os; print(os.getcwd())"]);
+  assert.equal(out.code, 0, out.err);
+  const file = /captured: (evidence\/tests-1\.txt)/.exec(out.out)![1];
+  const text = fs.readFileSync(path.join(r.run, file), "utf8");
+  assert.ok(text.includes(`in: ${s.worktree}`), text);
+  assert.ok(text.split("\n").includes(s.worktree!), text);
+  assert.match(verify(["worktree", "--run", r.run]).err, /already/);
 });

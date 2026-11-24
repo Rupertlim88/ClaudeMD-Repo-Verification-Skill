@@ -26,7 +26,8 @@ const USAGE = `usage: node ${SELF} <command> …
   ties <repo> [--json] [--run <folder>]               the two-way tie check; exits 1 on a broken tie
   clauses <repo> [--rule "<bold sentence>"] [--json] [--run <folder>]   each rule's clauses and floor
   items <repo> [--folder <path>] [--json] [--run <folder>]   the four-part tie check's items and their jev commands
-  capture --run <folder> --name <word> [--test] -- <command> …   run a command in the repo and capture it; --test records it as a test command
+  worktree --run <folder>                             make the run's branch and worktree from the start commit
+  capture --run <folder> --name <word> [--test] -- <command> …   run a command in the run's worktree (in the repo before it exists) and capture it; --test records it as a test command
   jev --run <folder> --item <id> --template <name> [--rule "<bold>"] [--file <path>] [--step <id>] [--evidence <file>]…
   status --run <folder>
   step --run <folder> --step <${STEP_IDS.join("|")}>
@@ -265,6 +266,8 @@ async function start(repoArg: string, a: Args): Promise<Output> {
     `     ${v} log-answer --run "$RUN" --id q1 <<'A'`,
     `     ${v} budget --run "$RUN" --question q1 --usd <amount> --claude-runs <count> --compute-hours <hours>`,
     `  3. ${v} rules ${shell(repo)} --run "$RUN"   and   ${v} ties ${shell(repo)} --run "$RUN"`,
+    "  4. Check other people's work (branches/other-people.md), then make the run's worktree; every capture after it,",
+    `     the test commands first, runs there: ${v} worktree --run "$RUN"`,
     ...(guess === "A" || guess === "B" ? ["  Then open branches/situation-a.md (A) or branches/interview.md (B)."] : []),
   ].join("\n");
   return { text, code: 0 };
@@ -285,14 +288,33 @@ function record(p: RunPaths, file: string, command: string, exit: number): strin
 // Runs a command in the run's repo, printing its output as it comes and writing it to the evidence file as it goes;
 // then records the file with the command's exit code, which it returns.
 // With isTest, the command is also recorded in the state as one of the run's test commands.
+// Makes the run's branch, verify-rules/run-<the run's start time>, and its worktree in the run folder, both from the
+// start commit, and records them: every later capture runs there (branches/other-people.md).
+function worktreeCommand(p: RunPaths): Output {
+  const s = readState(p);
+  if (s.worktree !== null) throw new Error(`the run already has its worktree, ${s.worktree}, on ${s.runBranch}`);
+  const time = /(\d{8}T\d{6}Z)$/.exec(p.root)?.[1];
+  if (time === undefined || s.startCommit === "") throw new Error("the run has no start time or start commit: run start first");
+  const runBranch = `verify-rules/run-${time}`;
+  execFileSync("git", ["worktree", "add", "-q", "-b", runBranch, p.worktree, s.startCommit], { cwd: s.repo, stdio: ["ignore", "ignore", "pipe"] });
+  updateState(p, (x) => { x.worktree = p.worktree; x.runBranch = runBranch; });
+  append(p, "worktree", { worktree: p.worktree, runBranch, from: s.startCommit });
+  refresh(p, `worktree made on ${runBranch}`);
+  return { text: `worktree: ${p.worktree}, on ${runBranch}, from the start commit ${s.startCommit}; every capture now runs there`, code: 0 };
+}
+
 async function captureCommand(p: RunPaths, name: string, command: string[], isTest: boolean): Promise<number> {
   if (command.length === 0) throw new Usage("capture needs the command after --");
+  const s = readState(p);
+  if (isTest && s.worktree === null)
+    throw new Error("test commands run in the run's worktree (branches/test-commands.md): make it first with `verify worktree`");
+  const cwd = s.worktree ?? s.repo;
   const file = nextEvidence(p, name);
   const fd = fs.openSync(path.join(p.root, file), "w");
   const write = (chunk: string) => { process.stdout.write(chunk); fs.writeSync(fd, chunk); };
-  write(`$ ${command.map(shell).join(" ")}\n`);
+  write(`$ ${command.map(shell).join(" ")}\nin: ${cwd}\n`);
   const exit = await new Promise<number>((resolve) => {
-    const child = spawn(command[0], command.slice(1), { cwd: readState(p).repo });
+    const child = spawn(command[0], command.slice(1), { cwd });
     child.stdout.setEncoding("utf8").on("data", write);
     child.stderr.setEncoding("utf8").on("data", write);
     child.on("error", (e) => { write(`${e.message}\n`); resolve(127); });
@@ -327,6 +349,7 @@ async function main(argv: string[]): Promise<number> {
     case "clauses": out = await clausesCommand(repo(), a); break;
     case "items": out = await itemsCommand(repo(), a); break;
     case "jev": out = await jevCommand(a); break;
+    case "worktree": out = worktreeCommand(run()); break;
     case "capture": return captureCommand(run(), need(a, "name"), dash === -1 ? [] : all.slice(dash + 1), a.test);
     case "status": out = { text: fs.readFileSync(run().status, "utf8").trimEnd(), code: 0 }; break;
     case "step": {

@@ -40,6 +40,7 @@ export const STEP_RESULTS = ["passed", "failed", "failed, continued by user", "n
 export interface RunState {
   repo: string; scope: string; startCommit: string; baseline: string; baselineHow: string;
   branch: string; doerModel: string; step: StepId | null; round: number; stepStartCommit: string | null;
+  worktree: string | null; runBranch: string | null;
   items: Record<string, ItemState>;
   testCommands: { name: string; command: string; exit: number; outputFile: string }[];
   knownFailures: string[];
@@ -98,7 +99,7 @@ function realPathOf(folder: string): string {
 function freshState(repo: string): RunState {
   return {
     repo, scope: "", startCommit: "", baseline: "", baselineHow: "", branch: "", doerModel: "",
-    step: null, round: 0, stepStartCommit: null, items: {}, testCommands: [], knownFailures: [], budgets: null,
+    step: null, round: 0, stepStartCommit: null, worktree: null, runBranch: null, items: {}, testCommands: [], knownFailures: [], budgets: null,
     spend: { jevCalls: 0, jevInputTokens: 0, jevOutputTokens: 0, jevUsd: 0, claudeRuns: 0, claudeSeconds: 0, claudeListUsd: 0 },
     open: [], declined: [], agents: [], mistakes: {}, situation: null, steps: {},
   };

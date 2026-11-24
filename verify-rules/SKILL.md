@@ -95,9 +95,11 @@ from outside the file's CLAUDE.md, canaries, golden outputs, and the end-of-run 
    ask it word for word, then `$V log-answer --run "$RUN" --id q1 <<'A'` with the user's answer exactly as typed, and
    `$V budget --run "$RUN" --question q1 --usd <amount> --claude-runs <count> --compute-hours <hours>` (leave out
    `--compute-hours` only when the repo uses no compute service). Then `$V rules <repo> --run "$RUN"`,
-   `$V ties <repo> --run "$RUN"` and `$V clauses <repo> --run "$RUN"`; run each test command through
-   `$V capture --run "$RUN" --name tests --test -- <command>`, which also records it in the
-   state as a test command. Log every other question the same way.
+   `$V ties <repo> --run "$RUN"` and `$V clauses <repo> --run "$RUN"`. Check other people's work
+   (`branches/other-people.md`), then `$V worktree --run "$RUN"` makes the run's branch and worktree from the start
+   commit; every capture after it runs in the worktree, so a capture about the user's own working tree names it
+   (`git -C <repo> …`). Run each test command through `$V capture --run "$RUN" --name tests --test -- <command>`,
+   which also records it in the state as a test command. Log every other question the same way.
 2. **Steps 1 to 11:** do each step as written below, with `rules`, `ties`, `clauses` and `capture` for its evidence.
 3. **The tie-stage check (steps 12 and 14):** `$V step --run "$RUN" --step tie`, then `$V items <repo> --run "$RUN"`
    (`--folder <path>` for one folder). Run every `jev` command it prints, unchanged, one item at a time.
