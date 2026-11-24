@@ -38,6 +38,8 @@ test("start makes the run folder outside the repo, finds the situation, and says
   assert.deepEqual([s.situation?.guess, s.doerModel, s.step], ["D", "claude-opus-5-5", "0"]);
   assert.match(r.out, /Situation: D/);
   assert.match(r.out, /verify\.ts budget/);
+  assert.match(r.out, /--kind b --topic budgets/);
+  assert.match(r.out, /--compute-hours <hours>/);
   assert.match(fs.readFileSync(path.join(r.run, "status.md"), "utf8"), /step 0, round 1/);
 });
 
@@ -119,7 +121,7 @@ test("jev refuses an item the item list does not hold, a mismatched rule, and ev
 
 test("the question log keeps the answer exactly as typed, and budgets need an answered question", () => {
   const r = start(TIED);
-  const asked = verify(["log-question", "--run", r.run, "--kind", "c", "--topic", "budgets"], "What may this run spend?\n");
+  const asked = verify(["log-question", "--run", r.run, "--kind", "b", "--topic", "budgets"], "What may this run spend?\n");
   assert.match(asked.out, /logged q1/);
   assert.match(verify(["status", "--run", r.run]).out, /waiting on you: question q1 \(budgets\)/);
   assert.match(verify(["budget", "--run", r.run, "--question", "q1", "--usd", "1", "--claude-runs", "5"]).err, /no answer/);
@@ -127,7 +129,21 @@ test("the question log keeps the answer exactly as typed, and budgets need an an
   const q = JSON.parse(fs.readFileSync(path.join(r.run, "questions.jsonl"), "utf8").trim().split("\n").at(-1)!);
   assert.equal(q.answer, "$1, and 5 Claude runs  ");
   assert.equal(verify(["budget", "--run", r.run, "--question", "q1", "--usd", "1", "--claude-runs", "5"]).code, 0);
-  assert.deepEqual(readState(openRun(r.run)).budgets, { moneyUsd: 1, claudeRuns: 5, questionId: "q1" });
+  assert.deepEqual(readState(openRun(r.run)).budgets, { moneyUsd: 1, claudeRuns: 5, computeHours: null, questionId: "q1" });
+});
+
+test("budgets record the compute hours, and come only from a budget question (kind b)", () => {
+  const r = start(TIED);
+  verify(["log-question", "--run", r.run, "--kind", "c", "--topic", "budgets"], "What may this run spend?\n");
+  verify(["log-answer", "--run", r.run, "--id", "q1"], "$2, and at most an hour of Kaggle\n");
+  const wrongKind = verify(["budget", "--run", r.run, "--question", "q1", "--usd", "2", "--claude-runs", "40", "--compute-hours", "1"]);
+  assert.match(wrongKind.err, /kind b/);
+  assert.equal(readState(openRun(r.run)).budgets, null);
+  verify(["log-question", "--run", r.run, "--kind", "b", "--topic", "budgets"], "What may this run spend?\n");
+  verify(["log-answer", "--run", r.run, "--id", "q2"], "$2, and at most an hour of Kaggle\n");
+  assert.equal(verify(["budget", "--run", r.run, "--question", "q2", "--usd", "2", "--claude-runs", "40", "--compute-hours", "1"]).code, 0);
+  assert.deepEqual(readState(openRun(r.run)).budgets, { moneyUsd: 2, claudeRuns: 40, computeHours: 1, questionId: "q2" });
+  assert.match(verify(["status", "--run", r.run]).out, /compute: at most 1 hours? \(Kaggle GPU or the repo's own unit\)/);
 });
 
 test("step sets the step the status file follows, and a step again starts its next round", () => {

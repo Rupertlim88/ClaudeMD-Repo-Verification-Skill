@@ -43,7 +43,7 @@ export interface RunState {
   items: Record<string, ItemState>;
   testCommands: { name: string; command: string; exit: number; outputFile: string }[];
   knownFailures: string[];
-  budgets: { moneyUsd: number; claudeRuns: number; questionId: string } | null;
+  budgets: { moneyUsd: number; claudeRuns: number; computeHours: number | null; questionId: string } | null;
   spend: { jevCalls: number; jevInputTokens: number; jevOutputTokens: number; jevUsd: number; claudeRuns: number;
     claudeSeconds: number; claudeListUsd: number };
   open: OpenItem[]; declined: DeclinedItem[];

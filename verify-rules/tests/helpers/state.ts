@@ -9,7 +9,7 @@ export function sampleState(): RunState {
     items: { "7.clause:R1#c1": { status: "passed", answers: [{ check: "correct", by: "jev", verdict: "PASS", entry: "d".repeat(64) }] } },
     testCommands: [{ name: "all", command: "python -m pytest", exit: 0, outputFile: "evidence/all.txt" }],
     knownFailures: ["tests/test_x.py::test_slow"],
-    budgets: { moneyUsd: 5, claudeRuns: 20, questionId: "q1" },
+    budgets: { moneyUsd: 5, claudeRuns: 20, computeHours: null, questionId: "q1" },
     spend: { jevCalls: 3, jevInputTokens: 4000, jevOutputTokens: 60, jevUsd: 0.0042, claudeRuns: 1, claudeSeconds: 90,
       claudeListUsd: 1.2 },
     open: [{ item: "8.finding:f2", code: "doer-deferred", evidence: "", needsPutOffQuestion: true }],

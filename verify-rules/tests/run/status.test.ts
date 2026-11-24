@@ -33,7 +33,7 @@ function inStep7(): RunState {
       "7.clause:R1#c2": item("in progress"),
       "7.clause:R2#c1": item("not started"),
     },
-    budgets: { moneyUsd: 5, claudeRuns: 20, questionId: "q1" },
+    budgets: { moneyUsd: 5, claudeRuns: 20, computeHours: null, questionId: "q1" },
     spend: { ...s.spend, jevUsd: 0.0042, claudeRuns: 3 },
     open: [
       { item: "7.clause:R2#c1", code: "user-unanswered", evidence: "question q2", needsPutOffQuestion: false },
@@ -62,7 +62,7 @@ test("the top lines count only the current step's items, name each question and 
     "- step and round: step 7, round 2",
     "- now: mutation runner: clause 4 of 31",
     "- items passed: 1 of 3 in step 7",
-    "- spend: $0.0042 of $5.00 on Jev; 3 of 20 Claude runs",
+    "- spend: $0.0042 of $5.00 on Jev; 3 of 20 Claude runs; no compute budget",
     "- checks still unpaid: 120, about $0.0100",
     "- open items: user-unanswered 1, doer-deferred 1, needs-user-only-fact 1",
     "- updated: 2026-11-23T06:00:00Z",

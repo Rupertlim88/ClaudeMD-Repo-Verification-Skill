@@ -50,7 +50,7 @@ test("secrets and account names are stripped from a state, and only their kind a
 
 function run() {
   const p = createRun("r", new Date("2026-11-23T06:00:00Z"), tmpDir("runs"), makeRepo({ "a.py": "x = 1\n" }));
-  updateState(p, (s) => { s.budgets = { moneyUsd: 0.01, claudeRuns: 2, questionId: "q1" }; });
+  updateState(p, (s) => { s.budgets = { moneyUsd: 0.01, claudeRuns: 2, computeHours: null, questionId: "q1" }; });
   return p;
 }
 
@@ -99,7 +99,7 @@ test("no call is sent before the budgets are set, nor once the money budget is s
   const p = run();
   updateState(p, (s) => { s.budgets = null; });
   await assert.rejects(askJev(p, request, { decide: f.decide, accountNames: [] }), /budget/);
-  updateState(p, (s) => { s.budgets = { moneyUsd: 0.01, claudeRuns: 2, questionId: "q1" }; s.spend.jevUsd = 0.01; });
+  updateState(p, (s) => { s.budgets = { moneyUsd: 0.01, claudeRuns: 2, computeHours: null, questionId: "q1" }; s.spend.jevUsd = 0.01; });
   await assert.rejects(askJev(p, request, { decide: f.decide, accountNames: [] }), /budget/);
   assert.equal(f.calls.length, 0);
 });

@@ -91,9 +91,10 @@ clause is tested (the mutation runner has no command yet), part 3's piece-by-pie
 from outside the file's CLAUDE.md, canaries, golden outputs, and the end-of-run report.
 
 1. **Step 0.** `$V start <repo> --doer <your model id>` prints the run folder (`RUN=…`) and the situation. Ask the
-   budgets: `$V log-question --run "$RUN" --kind c --topic budgets <<'Q'` with the question, ask it word for word,
-   then `$V log-answer --run "$RUN" --id q1 <<'A'` with the user's answer exactly as typed, and
-   `$V budget --run "$RUN" --question q1 --usd <amount> --claude-runs <count>`. Then `$V rules <repo> --run "$RUN"`,
+   budgets (`branches/budget.md`): `$V log-question --run "$RUN" --kind b --topic budgets <<'Q'` with the question,
+   ask it word for word, then `$V log-answer --run "$RUN" --id q1 <<'A'` with the user's answer exactly as typed, and
+   `$V budget --run "$RUN" --question q1 --usd <amount> --claude-runs <count> --compute-hours <hours>` (leave out
+   `--compute-hours` only when the repo uses no compute service). Then `$V rules <repo> --run "$RUN"`,
    `$V ties <repo> --run "$RUN"` and `$V clauses <repo> --run "$RUN"`; run each test command through
    `$V capture --run "$RUN" --name tests --test -- <command>`, which also records it in the
    state as a test command. Log every other question the same way.

@@ -20,7 +20,9 @@ const usd = (amount: number, decimals: number) => `$${amount.toFixed(decimals)}`
 function spendLine(s: RunState): string {
   const jev = usd(s.spend.jevUsd, 4);
   if (s.budgets === null) return `${jev} on Jev; ${s.spend.claudeRuns} Claude runs; no budgets set yet`;
-  return `${jev} of ${usd(s.budgets.moneyUsd, 2)} on Jev; ${s.spend.claudeRuns} of ${s.budgets.claudeRuns} Claude runs`;
+  const hours = s.budgets.computeHours;
+  const compute = hours === null ? "no compute budget" : `compute: at most ${hours} ${hours === 1 ? "hour" : "hours"} (Kaggle GPU or the repo's own unit)`;
+  return `${jev} of ${usd(s.budgets.moneyUsd, 2)} on Jev; ${s.spend.claudeRuns} of ${s.budgets.claudeRuns} Claude runs; ${compute}`;
 }
 
 function openByCode(s: RunState): string {

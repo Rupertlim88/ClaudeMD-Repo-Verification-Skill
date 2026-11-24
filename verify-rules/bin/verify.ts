@@ -30,7 +30,7 @@ const USAGE = `usage: node ${SELF} <command> …
   jev --run <folder> --item <id> --template <name> [--rule "<bold>"] [--file <path>] [--step <id>] [--evidence <file>]…
   status --run <folder>
   step --run <folder> --step <${STEP_IDS.join("|")}>
-  budget --run <folder> --question <id> --usd <amount> --claude-runs <count>
+  budget --run <folder> --question <id> --usd <amount> --claude-runs <count> [--compute-hours <hours>]
   log-question --run <folder> --kind <a|b|c> --topic <topic> [--items <id,id>] [--recommendation <text>]   (text on stdin)
   log-answer --run <folder> --id <question id> [--message-id <id>]   (the answer on stdin, exactly as typed)
   checker-prompt --run <folder> --step <id>
@@ -258,11 +258,12 @@ async function start(repoArg: string, a: Args): Promise<Output> {
     "",
     "Next (SKILL.md: How to run this version):",
     `  RUN=${quote(p.root)}`,
-    "  1. Ask the user for the budgets (money for Jev, and the number of Claude checker runs). Log the question, then ask it",
-    `     word for word: ${v} log-question --run "$RUN" --kind c --topic budgets <<'Q'`,
+    "  1. Ask the user for the budgets (money for Jev, the number of Claude checker runs, and compute hours such as Kaggle",
+    `     GPU hours, where the repo uses compute). Log the question, then ask it word for word:`,
+    `     ${v} log-question --run "$RUN" --kind b --topic budgets <<'Q'`,
     "  2. Log the answer exactly as the user typed it, then set the budgets:",
     `     ${v} log-answer --run "$RUN" --id q1 <<'A'`,
-    `     ${v} budget --run "$RUN" --question q1 --usd <amount> --claude-runs <count>`,
+    `     ${v} budget --run "$RUN" --question q1 --usd <amount> --claude-runs <count> --compute-hours <hours>`,
     `  3. ${v} rules ${shell(repo)} --run "$RUN"   and   ${v} ties ${shell(repo)} --run "$RUN"`,
     ...(guess === "A" || guess === "B" ? ["  Then open branches/situation-a.md (A) or branches/interview.md (B)."] : []),
   ].join("\n");
@@ -348,12 +349,17 @@ async function main(argv: string[]): Promise<number> {
       const id = need(a, "question");
       const q = questions(p).find((x) => x.id === id);
       if (q?.answer == null) throw new Error(`question ${id} has no answer in the question log yet: the budgets come from the user's answer`);
-      const budgets = { moneyUsd: Number(need(a, "usd")), claudeRuns: Number(need(a, "claude-runs")), questionId: id };
-      if (!(budgets.moneyUsd >= 0) || !Number.isInteger(budgets.claudeRuns)) throw new Usage("--usd must be an amount and --claude-runs a count");
+      if (q.kind !== "b") throw new Error(`the budgets are a kind b question (branches/asking-the-user.md); ${id} is kind ${q.kind}: ask it again as kind b`);
+      const hours = one(a, "compute-hours");
+      const budgets = { moneyUsd: Number(need(a, "usd")), claudeRuns: Number(need(a, "claude-runs")),
+        computeHours: hours === undefined ? null : Number(hours), questionId: id };
+      if (!(budgets.moneyUsd >= 0) || !Number.isInteger(budgets.claudeRuns) || !(budgets.computeHours === null || budgets.computeHours >= 0))
+        throw new Usage("--usd and --compute-hours must be amounts and --claude-runs a count");
       updateState(p, (s) => { s.budgets = budgets; });
       append(p, "budgets", budgets);
       refresh(p, "budgets set");
-      out = { text: `budgets: $${budgets.moneyUsd} for Jev, ${budgets.claudeRuns} Claude checker runs (from ${id}: "${q.answer}")`, code: 0 };
+      const compute = budgets.computeHours === null ? "no compute" : `at most ${budgets.computeHours} compute hours`;
+      out = { text: `budgets: $${budgets.moneyUsd} for Jev, ${budgets.claudeRuns} Claude checker runs, ${compute} (from ${id}: "${q.answer}")`, code: 0 };
       break;
     }
     case "log-question": {
