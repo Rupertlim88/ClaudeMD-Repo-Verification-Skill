@@ -95,7 +95,8 @@ from outside the file's CLAUDE.md, canaries, golden outputs, and the end-of-run 
    then `$V log-answer --run "$RUN" --id q1 <<'A'` with the user's answer exactly as typed, and
    `$V budget --run "$RUN" --question q1 --usd <amount> --claude-runs <count>`. Then `$V rules <repo> --run "$RUN"`,
    `$V ties <repo> --run "$RUN"` and `$V clauses <repo> --run "$RUN"`; run each test command through
-   `$V capture --run "$RUN" --name tests -- <command>`. Log every other question the same way.
+   `$V capture --run "$RUN" --name tests --test -- <command>`, which also records it in the
+   state as a test command. Log every other question the same way.
 2. **Steps 1 to 11:** do each step as written below, with `rules`, `ties`, `clauses` and `capture` for its evidence.
 3. **The tie-stage check (steps 12 and 14):** `$V step --run "$RUN" --step tie`, then `$V items <repo> --run "$RUN"`
    (`--folder <path>` for one folder). Run every `jev` command it prints, unchanged, one item at a time.

@@ -26,7 +26,7 @@ const USAGE = `usage: node ${SELF} <command> …
   ties <repo> [--json] [--run <folder>]               the two-way tie check; exits 1 on a broken tie
   clauses <repo> [--rule "<bold sentence>"] [--json] [--run <folder>]   each rule's clauses and floor
   items <repo> [--folder <path>] [--json] [--run <folder>]   the four-part tie check's items and their jev commands
-  capture --run <folder> --name <word> -- <command> …   run a command (such as the tests) in the repo, and capture it
+  capture --run <folder> --name <word> [--test] -- <command> …   run a command in the repo and capture it; --test records it as a test command
   jev --run <folder> --item <id> --template <name> [--rule "<bold>"] [--file <path>] [--step <id>] [--evidence <file>]…
   status --run <folder>
   step --run <folder> --step <${STEP_IDS.join("|")}>
@@ -39,12 +39,13 @@ Every command that takes <repo> also takes --python <interpreter> (default: the 
 
 class Usage extends Error {}
 
-interface Args { positional: string[]; flags: Map<string, string[]>; json: boolean }
+interface Args { positional: string[]; flags: Map<string, string[]>; json: boolean; test: boolean }
 
 function parse(argv: string[]): Args {
-  const a: Args = { positional: [], flags: new Map(), json: false };
+  const a: Args = { positional: [], flags: new Map(), json: false, test: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--json") a.json = true;
+    else if (argv[i] === "--test") a.test = true;
     else if (argv[i].startsWith("--")) {
       if (i + 1 >= argv.length) throw new Usage(`${argv[i]} needs a value`);
       a.flags.set(argv[i].slice(2), [...a.flags.get(argv[i].slice(2)) ?? [], argv[++i]]);
@@ -237,9 +238,12 @@ async function start(repoArg: string, a: Args): Promise<Output> {
   const untied = report.notYetTied.rules.length + report.notYetTied.files.length;
   const guess = claudes === 0 ? (report.counted.length === 0 ? "A" : "B") : report.broken.length === 0 && untied === 0 ? "D" : "C";
   const counts = { countedFiles: report.counted.length, claudeMd: claudes, broken: report.broken.length, notYetTied: untied };
+  const startCommit = git(repo, "rev-parse", "HEAD");
+  const branch = git(repo, "branch", "--show-current");
   updateState(p, (s) => {
-    Object.assign(s, { startCommit: git(repo, "rev-parse", "HEAD"), branch: git(repo, "branch", "--show-current"), doerModel: doer,
-      situation: { guess, counts }, step: "0", round: 1, stepStartCommit: git(repo, "rev-parse", "HEAD") || null });
+    Object.assign(s, { startCommit, branch, doerModel: doer, situation: { guess, counts }, step: "0", round: 1,
+      stepStartCommit: startCommit || null,
+      baseline: startCommit, baselineHow: `the start commit, ${startCommit} (the head of ${branch || "a detached head"} when the run started)` });
   });
   append(p, "start", { repo, doer, situation: guess, counts });
   refresh(p, "step 0: the run is set up");
@@ -279,7 +283,8 @@ function record(p: RunPaths, file: string, command: string, exit: number): strin
 
 // Runs a command in the run's repo, printing its output as it comes and writing it to the evidence file as it goes;
 // then records the file with the command's exit code, which it returns.
-async function captureCommand(p: RunPaths, name: string, command: string[]): Promise<number> {
+// With isTest, the command is also recorded in the state as one of the run's test commands.
+async function captureCommand(p: RunPaths, name: string, command: string[], isTest: boolean): Promise<number> {
   if (command.length === 0) throw new Usage("capture needs the command after --");
   const file = nextEvidence(p, name);
   const fd = fs.openSync(path.join(p.root, file), "w");
@@ -294,6 +299,7 @@ async function captureCommand(p: RunPaths, name: string, command: string[]): Pro
   });
   write(`exit ${exit}\n`);
   fs.closeSync(fd);
+  if (isTest) updateState(p, (s) => { s.testCommands.push({ name, command: command.join(" "), exit, outputFile: file }); });
   console.log(record(p, file, command.join(" "), exit));
   return exit;
 }
@@ -320,7 +326,7 @@ async function main(argv: string[]): Promise<number> {
     case "clauses": out = await clausesCommand(repo(), a); break;
     case "items": out = await itemsCommand(repo(), a); break;
     case "jev": out = await jevCommand(a); break;
-    case "capture": return captureCommand(run(), need(a, "name"), dash === -1 ? [] : all.slice(dash + 1));
+    case "capture": return captureCommand(run(), need(a, "name"), dash === -1 ? [] : all.slice(dash + 1), a.test);
     case "status": out = { text: fs.readFileSync(run().status, "utf8").trimEnd(), code: 0 }; break;
     case "step": {
       const p = run();

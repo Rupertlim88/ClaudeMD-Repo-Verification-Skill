@@ -157,3 +157,22 @@ test("capture runs a command in the run's repo, captures its output and exit, an
   assert.deepEqual([e.kind, e.exit], ["output", 0]);
   assert.equal(verify(["capture", "--run", r.run, "--name", "fails", "--", "python3", "-c", "raise SystemExit(3)"]).code, 3);
 });
+
+test("start records the baseline: the start commit, and how it was chosen", () => {
+  const r = start(TIED);
+  const s = readState(openRun(r.run));
+  assert.ok(s.startCommit.length === 40, s.startCommit);
+  assert.equal(s.baseline, s.startCommit);
+  assert.match(s.baselineHow, /start commit/);
+});
+
+test("capture --test records the test command, its exit and its output file in the state", () => {
+  const r = start(TIED);
+  const c = verify(["capture", "--run", r.run, "--name", "tests", "--test", "--", "sh", "-c", "echo 3 passed; exit 0"]);
+  assert.equal(c.code, 0, c.err);
+  const s = readState(openRun(r.run));
+  assert.deepEqual(s.testCommands, [{ name: "tests", command: "sh -c echo 3 passed; exit 0", exit: 0, outputFile: "evidence/tests-1.txt" }]);
+  const plain = verify(["capture", "--run", r.run, "--name", "other", "--", "true"]);
+  assert.equal(plain.code, 0, plain.err);
+  assert.equal(readState(openRun(r.run)).testCommands.length, 1);
+});
